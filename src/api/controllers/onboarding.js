@@ -73,58 +73,124 @@ const saveUserMappings = async (req, res, next) => {
       throw new ApiError(400, 'Invalid mappings format');
     }
     
-    // Clear existing non-admin users for this organization
-    await supabase
+    // Get existing users for this organization
+    const { data: existingUsers } = await supabase
       .from('users')
-      .delete()
-      .eq('org_id', orgId)
-      .eq('is_admin', false);
+      .select('id, github_username, slack_user_id, is_admin')
+      .eq('org_id', orgId);
     
-    // Create array of user objects for insert
-    const usersToCreate = mappings.map(mapping => ({
-      id: uuidv4(),
-      org_id: orgId,
-      github_username: mapping.githubUsername,
-      slack_user_id: mapping.slackUserId,
-      is_admin: !!mapping.isAdmin
-    }));
+    // Create maps for lookup
+    const existingUsersByGithub = new Map();
+    const existingUsersBySlack = new Map();
     
-    // Insert all users
-    const { data, error } = await supabase
-      .from('users')
-      .insert(usersToCreate)
-      .select();
+    existingUsers.forEach(user => {
+      if (user.github_username) {
+        existingUsersByGithub.set(user.github_username, user);
+      }
+      if (user.slack_user_id) {
+        existingUsersBySlack.set(user.slack_user_id, user);
+      }
+    });
     
-    if (error) {
-      throw error;
+    // Process mappings individually to avoid unique constraint violations
+    const updatedUsers = [];
+    const errors = [];
+    
+    // Process each mapping one by one
+    for (const mapping of mappings) {
+      try {
+        const existingUserByGithub = existingUsersByGithub.get(mapping.githubUsername);
+        const existingUserBySlack = existingUsersBySlack.get(mapping.slackUserId);
+        
+        // Case 1: User exists by GitHub username
+        if (existingUserByGithub) {
+          // Update the Slack ID for this user (unless it's already mapped to someone else)
+          if (existingUserBySlack && existingUserBySlack.id !== existingUserByGithub.id) {
+            // Clear the Slack ID from the other user to avoid conflict
+            await supabase
+              .from('users')
+              .update({ slack_user_id: null })
+              .eq('id', existingUserBySlack.id);
+          }
+          
+          // Update the GitHub user with Slack ID
+          const { data, error } = await supabase
+            .from('users')
+            .update({
+              slack_user_id: mapping.slackUserId,
+              is_admin: !!mapping.isAdmin
+            })
+            .eq('id', existingUserByGithub.id)
+            .select();
+            
+          if (error) throw error;
+          if (data && data.length > 0) updatedUsers.push(data[0]);
+        }
+        // Case 2: Slack ID exists but GitHub username doesn't
+        else if (existingUserBySlack) {
+          // Update the user with the GitHub username
+          const { data, error } = await supabase
+            .from('users')
+            .update({
+              github_username: mapping.githubUsername,
+              is_admin: !!mapping.isAdmin
+            })
+            .eq('id', existingUserBySlack.id)
+            .select();
+            
+          if (error) throw error;
+          if (data && data.length > 0) updatedUsers.push(data[0]);
+        }
+        // Case 3: New user entirely
+        else {
+          const { data, error } = await supabase
+            .from('users')
+            .insert({
+              id: uuidv4(),
+              org_id: orgId,
+              github_username: mapping.githubUsername,
+              slack_user_id: mapping.slackUserId,
+              is_admin: !!mapping.isAdmin
+            })
+            .select();
+            
+          if (error) throw error;
+          if (data && data.length > 0) updatedUsers.push(data[0]);
+        }
+      } catch (error) {
+        // Log error but continue processing other mappings
+        console.error(`Error processing mapping for ${mapping.githubUsername}:`, error);
+        errors.push({
+          githubUsername: mapping.githubUsername,
+          slackUserId: mapping.slackUserId,
+          error: error.message
+        });
+      }
     }
     
     // Update admin_users array in organization
-    const adminUsers = data.filter(user => user.is_admin).map(user => user.id);
+    const adminUserIds = updatedUsers.filter(user => user.is_admin).map(user => user.id);
     
-    // Get existing admin (the current user)
-    const { data: existingAdmin } = await supabase
-      .from('users')
-      .select('id')
-      .eq('org_id', orgId)
-      .eq('is_admin', true)
-      .limit(1)
-      .single();
-    
-    if (existingAdmin && !adminUsers.includes(existingAdmin.id)) {
-      adminUsers.push(existingAdmin.id);
-    }
+    // Add existing admins who aren't in the current mappings
+    existingUsers.forEach(user => {
+      if (user.is_admin && 
+          !adminUserIds.includes(user.id) && 
+          !updatedUsers.some(updatedUser => updatedUser.id === user.id)) {
+        adminUserIds.push(user.id);
+      }
+    });
     
     await supabase
       .from('organizations')
       .update({
-        admin_users: adminUsers
+        admin_users: adminUserIds
       })
       .eq('id', orgId);
     
     res.json({
       success: true,
-      users: data
+      users: updatedUsers,
+      errors: errors.length > 0 ? errors : undefined
     });
   } catch (error) {
     next(error);
