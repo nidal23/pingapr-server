@@ -5,63 +5,53 @@ const { ApiError } = require('../../middleware/error');
 
 // Get current onboarding status
 const getStatus = async (req, res, next) => {
-  try {
-    const orgId = req.organization.id;
-    
-    // Check GitHub connection
-    const { data: githubConnection } = await supabase
-      .from('github_connections')
-      .select('is_connected')
-      .eq('org_id', orgId)
-      .single();
-    
-    // Check Slack connection
-    const { data: slackConnection } = await supabase
-      .from('slack_connections')
-      .select('is_connected')
-      .eq('org_id', orgId)
-      .single();
-    
-    // Get active repositories
-    const { data: repositories } = await supabase
-      .from('repositories')
-      .select('github_repo_id')
-      .eq('org_id', orgId)
-      .eq('is_active', true);
-    
-    // Get user mappings
-    const { data: users } = await supabase
-      .from('users')
-      .select('github_username, slack_user_id, is_admin')
-      .eq('org_id', orgId)
-      .not('github_username', 'eq', 'pending');
-    
-    // Get organization settings
-    const { data: org } = await supabase
-      .from('organizations')
-      .select('settings, onboarding_completed')
-      .eq('id', orgId)
-      .single();
-    
-    res.json({
-      githubConnected: !!githubConnection?.is_connected,
-      slackConnected: !!slackConnection?.is_connected,
-      activeRepositories: repositories?.map(repo => repo.github_repo_id) || [],
-      userMappings: users?.map(user => ({
-        githubUsername: user.github_username,
-        slackUserId: user.slack_user_id,
-        isAdmin: user.is_admin
-      })) || [],
-      settings: org?.settings || {
-        prReminderHours: 24,
-        channelArchiveDays: 7
-      },
-      onboardingCompleted: !!org?.onboarding_completed
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+    try {
+      const orgId = req.organization.id;
+      
+      // Get organization details with connection status
+      const { data: org } = await supabase
+        .from('organizations')
+        .select('github_connected, slack_connected, settings, onboarding_completed')
+        .eq('id', orgId)
+        .single();
+      
+      if (!org) {
+        throw new ApiError(404, 'Organization not found');
+      }
+      
+      // Get active repositories
+      const { data: repositories } = await supabase
+        .from('repositories')
+        .select('github_repo_id')
+        .eq('org_id', orgId)
+        .eq('is_active', true);
+      
+      // Get user mappings
+      const { data: users } = await supabase
+        .from('users')
+        .select('github_username, slack_user_id, is_admin')
+        .eq('org_id', orgId)
+        .not('github_username', 'like', 'pending_%');
+      
+      res.json({
+        githubConnected: !!org.github_connected,
+        slackConnected: !!org.slack_connected,
+        activeRepositories: repositories?.map(repo => repo.github_repo_id) || [],
+        userMappings: users?.map(user => ({
+          githubUsername: user.github_username,
+          slackUserId: user.slack_user_id,
+          isAdmin: user.is_admin
+        })) || [],
+        settings: org?.settings || {
+          prReminderHours: 24,
+          channelArchiveDays: 7
+        },
+        onboardingCompleted: !!org?.onboarding_completed
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 
 // Save user mappings
 const saveUserMappings = async (req, res, next) => {

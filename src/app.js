@@ -14,9 +14,18 @@ const { errorHandler } = require('./middleware/error');
 const app = express();
 
 // Basic middleware
-app.use(helmet()); // Security headers
-app.use(cors()); // Cross-origin resource sharing
-app.use(morgan('dev')); // HTTP request logging
+app.use(helmet({
+    // Disable contentSecurityPolicy for development
+    contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false
+  })); 
+  app.use(cors({
+    origin: process.env.NODE_ENV === 'production' 
+      ? process.env.FRONTEND_URL 
+      : ['http://localhost:3000', 'http://localhost:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+  }));app.use(morgan('dev')); // HTTP request logging
 app.use(express.json()); // Parse JSON request bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded request bodies
 

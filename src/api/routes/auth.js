@@ -10,5 +10,7 @@ router.post('/login', authController.login);
 
 // Protected routes
 router.get('/me', verifyJWT, authController.getCurrentUser);
+router.post('/update-identities', verifyJWT, authController.updateUserIdentities);
+
 
 module.exports = router;

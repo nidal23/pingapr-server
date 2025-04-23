@@ -2,7 +2,7 @@
 
 const { WebClient } = require('@slack/web-api');
 const { supabase } = require('../supabase/client');
-
+const config = require('../../config'); // Add this import
 /**
  * Send invitation messages to team members
  * @param {string} orgId - Organization ID
