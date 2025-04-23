@@ -6,7 +6,7 @@ const router = express.Router();
 // const slackCommandController = require('../controllers/slack/commands');
 const slackController = require('../controllers/slack/auth');
 const { verifyJWT } = require('../../middleware/auth');
-
+const slackNotificationController = require('../controllers/slack/notifications')
 
 //Slack related Auth
 
@@ -22,7 +22,7 @@ router.get('/users', verifyJWT, slackController.getUsers);
 // router.post('/events', verifyJWT, slackEventController.handleEvents);
 
 // Handle Slack interactive components (buttons, menus, etc.)
-// router.post('/interactions', verifyJWT, slackInteractionController.handleInteractions);
+router.post('/send-invitations', verifyJWT, slackNotificationController.sendTeamInvitations);
 
 // Handle Slack slash commands
 // router.post('/commands', verifyJWT, slackCommandController.handleCommands);

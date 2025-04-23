@@ -3,8 +3,12 @@
 const slackNotifications = require('../../../services/slack/notifications');
 
 /**
- * Send invitation messages to team members
+ * Send invitations to all team members
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
  */
+
 async function sendTeamInvitations(req, res) {
   try {
     const orgId = req.user.org_id;

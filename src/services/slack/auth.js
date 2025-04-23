@@ -78,24 +78,13 @@ const slackAuth = {
         throw new Error(`Slack OAuth error: ${data.error}`);
       }
       
-      // Create or update Slack connection
-      await supabase
-        .from('slack_connections')
-        .upsert({
-          org_id: orgId,
-          team_id: data.team.id,
-          team_name: data.team.name,
-          access_token: data.access_token,
-          bot_user_id: data.bot_user_id,
-          is_connected: true
-        });
-      
-      // Update organization
+      // Update organization with Slack details and connection status
       await supabase
         .from('organizations')
         .update({
           slack_workspace_id: data.team.id,
-          slack_bot_token: data.access_token
+          slack_bot_token: data.access_token,
+          slack_connected: true // Set the connection flag
         })
         .eq('id', orgId);
       

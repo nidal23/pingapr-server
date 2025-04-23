@@ -22,16 +22,23 @@ const authService = {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    // Generate unique identifiers for pending values
+    const uniqueId = uuidv4();
+    const pendingGithubOrgId = `pending_${uniqueId}`;
+    const pendingSlackWorkspaceId = `pending_${uniqueId}`;
+    const pendingSlackBotToken = `pending_${uniqueId}`;
+    const pendingGithubInstallationId = `pending_${uniqueId}`;
+    
     // Create organization
     const { data: org, error: orgError } = await supabase
       .from('organizations')
       .insert({
         id: uuidv4(),
         name: `${name}'s Organization`,
-        github_org_id: 'pending',
-        slack_workspace_id: 'pending',
-        slack_bot_token: 'pending',
-        github_installation_id: 'pending',
+        github_org_id: pendingGithubOrgId,
+        slack_workspace_id: pendingSlackWorkspaceId,
+        slack_bot_token: pendingSlackBotToken,
+        github_installation_id: pendingGithubInstallationId,
         admin_users: []
       })
       .select()
@@ -39,7 +46,9 @@ const authService = {
     
     if (orgError) throw orgError;
     
-    // Create user
+    // Create user with a unique pending GitHub username
+    const pendingGithubUsername = `pending_${uniqueId}`;
+    
     const { data: user, error: userError } = await supabase
       .from('users')
       .insert({
@@ -48,7 +57,7 @@ const authService = {
         name,
         email,
         password: hashedPassword,
-        github_username: 'pending',
+        github_username: pendingGithubUsername,
         is_admin: true
       })
       .select('id, name, email, is_admin, org_id')

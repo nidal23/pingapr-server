@@ -33,7 +33,7 @@ const githubAuth = {
   },
 
   // Handle installation callback
-async handleInstallation(installationId, state) {
+  async handleInstallation(installationId, state) {
     try {
       // Decode state to get orgId
       const { orgId } = JSON.parse(Buffer.from(state, 'base64').toString());
@@ -56,12 +56,13 @@ async handleInstallation(installationId, state) {
         installation_id: installationId
       });
       
-      // Update organization record
+      // Update organization record with GitHub details
       await supabase
         .from('organizations')
         .update({
           github_org_id: installation.account.id.toString(),
-          github_installation_id: installationId.toString()
+          github_installation_id: installationId.toString(),
+          github_connected: true // Set the connection flag
         })
         .eq('id', orgId);
       
@@ -122,15 +123,6 @@ async handleInstallation(installationId, state) {
       const githubUser = userResponse.data;
       
       // Create or update GitHub connection
-      await supabase
-        .from('github_connections')
-        .upsert({
-          org_id: orgId,
-          github_user_id: githubUser.id.toString(),
-          github_username: githubUser.login,
-          access_token: accessToken,
-          is_connected: true
-        });
       
       // Update organization
       await supabase
@@ -286,35 +278,36 @@ async getUsers(orgId) {
   },
   
   // Get repositories
-  async getRepositories(orgId) {
-    try {
-      // Get GitHub connection
-      const { data: connection, error: connectionError } = await supabase
-        .from('github_connections')
-        .select('access_token')
-        .eq('org_id', orgId)
-        .single();
-      
-      if (connectionError) {
-        throw new Error('GitHub not connected');
-      }
-      
-      // Get repositories from database
-      const { data: repositories, error: reposError } = await supabase
-        .from('repositories')
-        .select('*')
-        .eq('org_id', orgId);
-      
-      if (reposError) {
-        throw reposError;
-      }
-      
-      return repositories;
-    } catch (error) {
-      console.error('Error getting repositories:', error);
-      throw error;
+  // Get repositories
+async getRepositories(orgId) {
+  try {
+    // Get organization to check if GitHub is connected
+    const { data: org, error: orgError } = await supabase
+      .from('organizations')
+      .select('github_connected')
+      .eq('id', orgId)
+      .single();
+    
+    if (orgError || !org.github_connected) {
+      throw new Error('GitHub not connected');
     }
-  },
+    
+    // Get repositories from database
+    const { data: repositories, error: reposError } = await supabase
+      .from('repositories')
+      .select('*')
+      .eq('org_id', orgId);
+    
+    if (reposError) {
+      throw reposError;
+    }
+    
+    return repositories;
+  } catch (error) {
+    console.error('Error getting repositories:', error);
+    throw error;
+  }
+},
   
   // Toggle repository
   async toggleRepository(orgId, repoId, isActive) {

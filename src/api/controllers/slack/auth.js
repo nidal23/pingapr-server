@@ -24,7 +24,7 @@ const handleCallback = async (req, res, next) => {
     await slackService.exchangeCodeForToken(code, state);
     
     // Redirect to frontend onboarding page
-    res.redirect(`${process.env.FRONTEND_URL}/onboarding?step=user-mapping`);
+    res.redirect(`${process.env.FRONTEND_URL}/onboarding`);
   } catch (error) {
     console.error('Slack callback error:', error);
     res.redirect(`${process.env.FRONTEND_URL}/onboarding?error=slack_auth_failed`);

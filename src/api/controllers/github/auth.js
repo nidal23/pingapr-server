@@ -44,7 +44,7 @@ const handleInstallationCallback = async (req, res, next) => {
       
       await githubService.handleInstallation(installation_id, state);
       
-      res.redirect(`${process.env.FRONTEND_URL}/onboarding?step=repositories`);
+      res.redirect(`${process.env.FRONTEND_URL}/onboarding`);
     } catch (error) {
       console.error('GitHub installation error:', error);
       res.redirect(`${process.env.FRONTEND_URL}/onboarding?error=github_installation_failed`);
@@ -62,7 +62,7 @@ const handleCallback = async (req, res, next) => {
     await githubService.exchangeCodeForToken(code, state);
     
     // Redirect to frontend onboarding page
-    res.redirect(`${process.env.FRONTEND_URL}/onboarding?step=repositories`);
+    res.redirect(`${process.env.FRONTEND_URL}/onboarding`);
   } catch (error) {
     console.error('GitHub callback error:', error);
     res.redirect(`${process.env.FRONTEND_URL}/onboarding?error=github_auth_failed`);
