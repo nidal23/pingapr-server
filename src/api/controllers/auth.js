@@ -60,7 +60,6 @@ const getCurrentUser = async (req, res, next) => {
   }
 };
 
-// src/api/controllers/auth.js - Update the updateUserIdentities function
 
 const updateUserIdentities = async (req, res, next) => {
   try {

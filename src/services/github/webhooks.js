@@ -3,11 +3,13 @@
  * Handles processing of GitHub webhook events
  */
 const { v4: uuidv4 } = require('uuid');
-const db = require('../../services/supabase/functions');
+const db = require('../supabase/functions');
 const slackService = require('../../services/slack/messages');
 const slackChannels = require('../../services/slack/channels');
 const { formatPrDescription } = require('../../utils/formatting');
-
+const { supabase } = require('../supabase/client');
+const githubService = require('./api')
+const githubAuth = require('./auth');
 /**
  * Handle GitHub ping event
  * @param {Object} payload - GitHub webhook payload
@@ -151,12 +153,26 @@ const handlePrOpened = async (org, repo, pr, payload) => {
       slack_channel_id: channel.id
     });
     
-    // Process requested reviewers
+    // Update the pullRequest object with the channel ID
+    pullRequest.slack_channel_id = channel.id;
+    
+    // Process requested reviewers and collect their Slack IDs
+    const reviewerInfo = [];
     if (pr.requested_reviewers && pr.requested_reviewers.length > 0) {
       for (const reviewer of pr.requested_reviewers) {
+        // Process review request and add to database
         await processReviewRequest(org, pullRequest, reviewer.login);
+        
+        // Find the reviewer in our database to get their Slack ID
+        const reviewerUser = await db.users.findByGithubUsername(org.id, reviewer.login);
+        
+        reviewerInfo.push({
+          githubUsername: reviewer.login,
+          slackUserId: reviewerUser?.slack_user_id || null
+        });
       }
     }
+    
     
     // Send PR notification to Slack
     const formattedDescription = formatPrDescription(pr.body || '', 300);
@@ -166,13 +182,14 @@ const handlePrOpened = async (org, repo, pr, payload) => {
       {
         title: pr.title,
         url: pr.html_url,
-        author: authorUsername,
+        author: author,
         repoName: repo.github_repo_name,
         description: formattedDescription,
         additions: pr.additions,
         deletions: pr.deletions,
         changedFiles: pr.changed_files,
-        labels: pr.labels.map(l => l.name)
+        labels: pr.labels.map(l => l.name),
+        reviewers: reviewerInfo  // Add the reviewers info here
       }
     );
     
@@ -547,7 +564,6 @@ const handlePrEdited = async (org, repo, pr, payload) => {
   };
 
 /**
-const { v4: uuidv4 /**
  * Handle GitHub pull request review event
  * @param {Object} payload - GitHub webhook payload
  * @returns {Object} Result of processing
@@ -556,8 +572,20 @@ const handlePullRequestReviewEvent = async (payload) => {
   try {
     const { action, repository, organization, pull_request: pr, review } = payload;
     
+    console.log(`[REVIEW EVENT] Processing review event: ${action} for PR #${pr.number}, review ID: ${review.id}`);
+    console.log('review body: ', review.body);
+    // Only process initial review submissions, not individual comments
+    if (action !== 'submitted') {
+      console.log(`[REVIEW EVENT] Ignoring non-submission review action: ${action}`);
+      return {
+        status: 'ignored',
+        message: `Ignoring non-submission review event: ${action}`
+      };
+    }
+
     // Get organization from database
     let org = await db.organizations.findByGithubOrgId(organization?.id || repository.owner.id);
+    console.log(`[REVIEW EVENT] Found organization: ${org ? org.id : 'not found'}`);
     
     // If organization doesn't exist, we can't process this webhook
     if (!org) {
@@ -566,9 +594,46 @@ const handlePullRequestReviewEvent = async (payload) => {
         message: 'Organization not registered with PingaPR'
       };
     }
+
+    if (!review.body && review.state === 'commented') {
+      console.log(`[REVIEW EVENT] Empty review detected (likely just a comment). Review ID: ${review.id}`);
+      
+      // Check if this review has any comments
+      try {
+        const reviewComments = await githubService.getReviewComments(
+          org.id,
+          repository.full_name,
+          pr.number,
+          review.id
+        );
+        
+        // If this review only has one comment, it's likely just a standalone comment
+        // not an actual review, so we should skip it
+        if (reviewComments && Array.isArray(reviewComments) && reviewComments.length === 1) {
+          console.log(`[REVIEW EVENT] This appears to be a single comment review, skipping to avoid duplication`);
+          return {
+            status: 'ignored',
+            message: 'Empty review with just a single comment, skipping to avoid duplication'
+          };
+        }
+      } catch (error) {
+        console.error(`[REVIEW EVENT] Error checking review comments: ${error}`);
+        // Continue processing in case of error, but log it
+      }
+    }
+    
+    // Check for Slack markers to avoid duplication
+    if (review.body && review.body.includes('<!-- SENT_FROM_SLACK -->')) {
+      console.log(`[REVIEW EVENT] Review ${review.id} originated from Slack, ignoring webhook`);
+      return {
+        status: 'ignored',
+        message: 'Review originated from Slack, ignoring to prevent duplication'
+      };
+    }
     
     // Find repository in database
     let repo = await db.repositories.findByGithubRepoId(org.id, repository.id);
+    console.log(`[REVIEW EVENT] Found repository: ${repo ? repo.id : 'not found'}`);
     
     // If repo doesn't exist or isn't active, ignore the webhook
     if (!repo || !repo.is_active) {
@@ -580,6 +645,7 @@ const handlePullRequestReviewEvent = async (payload) => {
     
     // Find PR in database
     const pullRequest = await db.pullRequests.findByPrNumber(repo.id, pr.number);
+    console.log(`[REVIEW EVENT] Found PR: ${pullRequest ? pullRequest.id : 'not found'}`);
     
     if (!pullRequest) {
       return {
@@ -588,9 +654,42 @@ const handlePullRequestReviewEvent = async (payload) => {
       };
     }
     
+    // Check if this review has been processed before
+    const commentId = `review_${review.id}`;
+    const existingComment = await db.comments.findByGithubCommentId(pullRequest.id, commentId);
+    console.log(`[REVIEW EVENT] Existing review comment: ${existingComment ? existingComment.id : 'not found'}`);
+    
+    if (existingComment) {
+      console.log(`[REVIEW EVENT] Review ${review.id} has already been processed, updating instead`);
+      
+      // Just update the existing comment if needed
+      if (review.body && existingComment.content !== review.body) {
+        await db.comments.update(existingComment.id, {
+          content: review.body,
+          updated_at: new Date().toISOString()
+        });
+        
+        // Update in Slack if needed
+        if (existingComment.slack_thread_ts) {
+          await slackService.updateMessage(
+            org.slack_bot_token,
+            pullRequest.slack_channel_id,
+            existingComment.slack_thread_ts,
+            review.body
+          );
+        }
+      }
+      
+      return {
+        status: 'success',
+        message: 'Pull request review updated'
+      };
+    }
+    
     // Find the reviewer
     const reviewerUsername = review.user.login;
     let reviewer = await db.users.findByGithubUsername(org.id, reviewerUsername);
+    console.log(`[REVIEW EVENT] Found reviewer: ${reviewer ? reviewer.id : 'not found'}`);
     
     if (!reviewer) {
       // Create a placeholder user record
@@ -600,6 +699,7 @@ const handlePullRequestReviewEvent = async (payload) => {
         github_username: reviewerUsername,
         is_admin: false
       });
+      console.log(`[REVIEW EVENT] Created new reviewer: ${reviewer.id}`);
     }
     
     // Find or create review request
@@ -610,6 +710,7 @@ const handlePullRequestReviewEvent = async (payload) => {
     
     // Update review request status based on review state
     const reviewStatus = review.state.toLowerCase();
+    console.log(`[REVIEW EVENT] Review status: ${reviewStatus}`);
     
     if (reviewRequest) {
       await db.reviewRequests.update(reviewRequest.id, {
@@ -618,9 +719,10 @@ const handlePullRequestReviewEvent = async (payload) => {
           ? new Date().toISOString()
           : null
       });
+      console.log(`[REVIEW EVENT] Updated review request: ${reviewRequest.id}`);
     } else if (['approved', 'changes_requested', 'commented'].includes(reviewStatus)) {
       // Create a new review request if one doesn't exist
-      await db.reviewRequests.create({
+      const newReviewRequest = await db.reviewRequests.create({
         id: uuidv4(),
         pr_id: pullRequest.id,
         reviewer_id: reviewer.id,
@@ -630,50 +732,76 @@ const handlePullRequestReviewEvent = async (payload) => {
           ? new Date().toISOString()
           : null
       });
+      console.log(`[REVIEW EVENT] Created new review request: ${newReviewRequest.id}`);
     }
     
-    // If the review has a body, create a comment record for two-way sync
-    if (review.body) {
-      // Store as a special comment type for reviews
-      const commentId = `review_${review.id}`;
-      
-      // Send to Slack and get thread timestamp
-      const message = await slackService.sendReviewMessage(
-        org.slack_bot_token,
-        pullRequest.slack_channel_id,
-        {
-          title: pr.title,
-          url: pr.html_url,
-          reviewer: reviewerUsername,
-          state: reviewStatus,
-          body: review.body
-        }
+    // Fetch comments count for this review - we don't need to process them here
+    // as they'll be handled by the review_comment webhook
+    let commentCount = 0;
+    
+    try {
+      const reviewComments = await githubService.getReviewComments(
+        org.id,
+        repository.full_name,
+        pr.number,
+        review.id
       );
       
-      // Store the comment mapping for two-way sync
-      if (message && message.ts) {
-        await db.comments.create({
+      if (reviewComments && Array.isArray(reviewComments)) {
+        commentCount = reviewComments.length;
+        console.log(`[REVIEW EVENT] Found ${commentCount} comments for review ${review.id}`);
+      }
+    } catch (error) {
+      console.error(`[REVIEW EVENT] Error fetching review comments:`, error);
+      // Continue with what we know
+    }
+    
+    // Get Slack user ID for mention
+    let slackUserId = null;
+    if (reviewer && reviewer.slack_user_id) {
+      slackUserId = reviewer.slack_user_id;
+    }
+    
+    // Send message to Slack
+    console.log(`[REVIEW EVENT] Sending review message to Slack: ${reviewStatus} with ${commentCount} comments`);
+    const message = await slackService.sendReviewMessage(
+      org.slack_bot_token,
+      pullRequest.slack_channel_id,
+      {
+        title: pr.title,
+        url: pr.html_url,
+        prNumber: pr.number,
+        reviewer: reviewerUsername,
+        reviewerSlackId: slackUserId,
+        state: reviewStatus,
+        body: review.body, 
+        commentCount: commentCount
+      }
+    );
+    
+    // Store the comment mapping for two-way sync
+    if (message && message.ts) {
+      try {
+        console.log(`[REVIEW EVENT] Creating comment record for review ${review.id} with thread timestamp ${message.ts}`);
+        
+        // Create the review summary comment
+        const newReviewComment = await db.comments.create({
           id: uuidv4(),
           pr_id: pullRequest.id,
           github_comment_id: commentId,
           slack_thread_ts: message.ts,
           user_id: reviewer.id,
-          content: review.body,
+          content: review.body || '',
+          source: 'github',
+          comment_type: 'review_summary',
           created_at: new Date(review.submitted_at || new Date()).toISOString()
         });
+        
+        console.log(`[REVIEW EVENT] Created review summary comment with ID: ${newReviewComment.id}`);
+      } catch (error) {
+        console.error(`[REVIEW EVENT] Error creating review records:`, error);
+        throw error;
       }
-    } else {
-      // Just send the review status without creating a comment record
-      await slackService.sendReviewStateMessage(
-        org.slack_bot_token,
-        pullRequest.slack_channel_id,
-        {
-          title: pr.title,
-          url: pr.html_url,
-          reviewer: reviewerUsername,
-          state: reviewStatus
-        }
-      );
     }
     
     return {
@@ -681,10 +809,11 @@ const handlePullRequestReviewEvent = async (payload) => {
       message: 'Pull request review processed'
     };
   } catch (error) {
-    console.error('Error handling pull request review event:', error);
+    console.error('[REVIEW EVENT] Error handling pull request review event:', error);
     throw error;
   }
 };
+
 
 /**
  * Handle GitHub pull request review comment event
@@ -695,16 +824,40 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
   try {
     const { action, repository, organization, pull_request: pr, comment } = payload;
     
+    console.log(`[REVIEW COMMENT] Processing review comment event: ${action} for PR #${pr.number}, comment ID: ${comment.id}`);
+    
     // Only process created or edited comments
     if (!['created', 'edited'].includes(action)) {
+      console.log(`[REVIEW COMMENT] Ignoring action: ${action}`);
       return {
         status: 'ignored',
-        message: `Comment action '${action}' not handled`
+        message: `Ignoring action: ${action}`
+      };
+    }
+    
+    // Check if this comment already exists in our db with source='slack'
+    const existingComment = await db.comments.findByGithubCommentId(null, comment.id.toString());
+    
+    if (existingComment && existingComment.source === 'slack') {
+      console.log(`[REVIEW COMMENT] Comment ${comment.id} originated from Slack, ignoring webhook to prevent duplication`);
+      return {
+        status: 'ignored',
+        message: 'Comment originated from Slack, ignoring to prevent duplication'
+      };
+    }
+    
+    // Check if comment includes Slack marker
+    if (comment.body && comment.body.includes('<!-- SENT_FROM_SLACK -->')) {
+      console.log(`[REVIEW COMMENT] Comment ${comment.id} has Slack marker, ignoring webhook`);
+      return {
+        status: 'ignored',
+        message: 'Comment originated from Slack, ignoring to prevent duplication'
       };
     }
     
     // Get organization from database
     let org = await db.organizations.findByGithubOrgId(organization?.id || repository.owner.id);
+    console.log(`[REVIEW COMMENT] Found organization: ${org ? org.id : 'not found'}`);
     
     // If organization doesn't exist, we can't process this webhook
     if (!org) {
@@ -716,6 +869,7 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
     
     // Find repository in database
     let repo = await db.repositories.findByGithubRepoId(org.id, repository.id);
+    console.log(`[REVIEW COMMENT] Found repository: ${repo ? repo.id : 'not found'}`);
     
     // If repo doesn't exist or isn't active, ignore the webhook
     if (!repo || !repo.is_active) {
@@ -727,6 +881,7 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
     
     // Find PR in database
     const pullRequest = await db.pullRequests.findByPrNumber(repo.id, pr.number);
+    console.log(`[REVIEW COMMENT] Found PR: ${pullRequest ? pullRequest.id : 'not found'}`);
     
     if (!pullRequest) {
       return {
@@ -738,6 +893,7 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
     // Find the commenter
     const commenterUsername = comment.user.login;
     let commenter = await db.users.findByGithubUsername(org.id, commenterUsername);
+    console.log(`[REVIEW COMMENT] Found commenter: ${commenter ? commenter.id : 'not found'}`);
     
     if (!commenter) {
       // Create a placeholder user record
@@ -747,57 +903,247 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
         github_username: commenterUsername,
         is_admin: false
       });
+      console.log(`[REVIEW COMMENT] Created new commenter: ${commenter.id}`);
     }
     
-    // Check if this is a new comment or a reply to another comment
-    const inReplyTo = comment.in_reply_to_id ? await db.comments.findByGithubCommentId(
-      pullRequest.id,
-      comment.in_reply_to_id.toString()
-    ) : null;
+    // Get Slack user ID for mention if available
+    let slackUserId = null;
+    if (commenter && commenter.slack_user_id) {
+      slackUserId = commenter.slack_user_id;
+    }
     
-    let message;
+    // Determine if this is a reply to another comment
+    const isReply = comment.in_reply_to_id !== undefined;
+    console.log(`[REVIEW COMMENT] Is this a reply? ${isReply ? 'Yes' : 'No'}`);
     
     if (action === 'created') {
-      if (inReplyTo) {
-        // This is a reply to an existing comment
-        message = await slackService.sendCommentReplyMessage(
-          org.slack_bot_token,
-          pullRequest.slack_channel_id,
-          inReplyTo.slack_thread_ts,
-          {
-            author: commenterUsername,
-            body: comment.body,
-            url: comment.html_url,
-            diffHunk: comment.diff_hunk,
-            path: comment.path
-          }
+      if (isReply) {
+        // This is a reply to another comment - handle it appropriately
+        console.log(`[REVIEW COMMENT] This is a reply to comment: ${comment.in_reply_to_id}`);
+        
+        // Find the parent comment
+        const parentComment = await db.comments.findByGithubCommentId(
+          pullRequest.id,
+          comment.in_reply_to_id.toString()
         );
+        
+        if (!parentComment) {
+          console.log(`[REVIEW COMMENT] Couldn't find parent comment ${comment.in_reply_to_id} in database`);
+          
+          // Fetch the parent comment from GitHub API since we don't have it
+          try {
+            const token = await githubAuth.getAccessToken(org.id);
+            const originalComment = await githubService.getReviewComment(
+              token, 
+              repository.full_name, 
+              comment.in_reply_to_id
+            );
+            
+            if (originalComment) {
+              // First send the original comment if we didn't have it
+              const originalMessage = await slackService.sendReviewCommentMessage(
+                org.slack_bot_token,
+                pullRequest.slack_channel_id,
+                null, // Create a new thread
+                {
+                  author: originalComment.user.login,
+                  body: originalComment.body,
+                  url: originalComment.html_url,
+                  path: originalComment.path,
+                  line: originalComment.line || originalComment.position
+                }
+              );
+              
+              // Create the parent comment record
+              const newParentComment = await db.comments.create({
+                id: uuidv4(),
+                pr_id: pullRequest.id,
+                github_comment_id: originalComment.id.toString(),
+                slack_thread_ts: originalMessage.ts,
+                user_id: commenter.id, // Best guess - we don't have the original user's ID
+                content: originalComment.body,
+                source: 'github',
+                comment_type: 'line_comment',
+                created_at: new Date(originalComment.created_at).toISOString()
+              });
+              
+              // Now send the reply to that thread
+              const replyMessage = await slackService.sendCommentReplyMessage(
+                org.slack_bot_token,
+                pullRequest.slack_channel_id,
+                originalMessage.ts,
+                {
+                  author: commenterUsername,
+                  authorSlackId: slackUserId,
+                  body: comment.body,
+                  url: comment.html_url
+                }
+              );
+              
+              // Create comment record for the reply
+              await db.comments.create({
+                id: uuidv4(),
+                pr_id: pullRequest.id,
+                github_comment_id: comment.id.toString(),
+                slack_thread_ts: originalMessage.ts,
+                parent_comment_id: newParentComment.id,
+                user_id: commenter.id,
+                content: comment.body,
+                source: 'github',
+                comment_type: 'reply',
+                created_at: new Date(comment.created_at).toISOString()
+              });
+            }
+          } catch (apiError) {
+            console.error(`[REVIEW COMMENT] Error fetching original comment: ${apiError}`);
+            // Fall back to creating a standalone comment
+            const message = await slackService.sendReviewCommentMessage(
+              org.slack_bot_token,
+              pullRequest.slack_channel_id,
+              null,
+              {
+                author: commenterUsername,
+                authorSlackId: slackUserId,
+                body: comment.body,
+                url: comment.html_url,
+                path: comment.path,
+                line: comment.line || comment.position
+              }
+            );
+            
+            // Create the comment record
+            await db.comments.create({
+              id: uuidv4(),
+              pr_id: pullRequest.id,
+              github_comment_id: comment.id.toString(),
+              slack_thread_ts: message.ts,
+              user_id: commenter.id,
+              content: comment.body,
+              source: 'github',
+              comment_type: 'line_comment',
+              created_at: new Date(comment.created_at).toISOString()
+            });
+          }
+        } else {
+          // We have the parent comment, send this as a reply
+          console.log(`[REVIEW COMMENT] Found parent comment: ${parentComment.id}`);
+          
+          // Get the thread_ts from the parent comment
+          const threadTs = parentComment.slack_thread_ts;
+          
+          if (!threadTs) {
+            console.log(`[REVIEW COMMENT] Parent comment has no thread_ts, creating a new message`);
+            
+            // Create a new message if there's no thread_ts
+            const message = await slackService.sendReviewCommentMessage(
+              org.slack_bot_token,
+              pullRequest.slack_channel_id,
+              null,
+              {
+                author: commenterUsername,
+                authorSlackId: slackUserId,
+                body: comment.body,
+                url: comment.html_url,
+                path: comment.path,
+                line: comment.line || comment.position
+              }
+            );
+            
+            // Store this comment
+            await db.comments.create({
+              id: uuidv4(),
+              pr_id: pullRequest.id,
+              github_comment_id: comment.id.toString(),
+              slack_thread_ts: message.ts,
+              user_id: commenter.id,
+              content: comment.body,
+              source: 'github',
+              comment_type: 'line_comment',
+              created_at: new Date(comment.created_at).toISOString()
+            });
+          } else {
+            // Send as a reply in the parent's thread
+            const message = await slackService.sendCommentReplyMessage(
+              org.slack_bot_token,
+              pullRequest.slack_channel_id,
+              threadTs,
+              {
+                author: commenterUsername,
+                authorSlackId: slackUserId,
+                body: comment.body,
+                url: comment.html_url
+              }
+            );
+            
+            // Store this comment with the parent relationship
+            await db.comments.create({
+              id: uuidv4(),
+              pr_id: pullRequest.id,
+              github_comment_id: comment.id.toString(),
+              slack_thread_ts: threadTs,
+              parent_comment_id: parentComment.id,
+              user_id: commenter.id,
+              content: comment.body,
+              source: 'github',
+              comment_type: 'reply',
+              created_at: new Date(comment.created_at).toISOString()
+            });
+          }
+        }
       } else {
-        // This is a new comment
-        message = await slackService.sendReviewCommentMessage(
+        // This is a new top-level comment
+        console.log(`[REVIEW COMMENT] This is a new top-level comment`);
+        
+        // Find the review summary this comment belongs to
+        const reviewId = comment.pull_request_review_id;
+        const reviewSummaryId = `review_${reviewId}`;
+        
+        const reviewSummary = await db.comments.findByGithubCommentId(
+          pullRequest.id,
+          reviewSummaryId
+        );
+        
+        let threadTs = null;
+        let parentId = null;
+        
+        if (reviewSummary) {
+          threadTs = reviewSummary.slack_thread_ts;
+          parentId = reviewSummary.id;
+          console.log(`[REVIEW COMMENT] Found review summary: ${reviewSummary.id} with thread: ${threadTs}`);
+        }
+        
+        // Post the comment to Slack
+        const lineNumber = comment.line || comment.position || 'Unknown line';
+        const message = await slackService.sendReviewCommentMessage(
           org.slack_bot_token,
           pullRequest.slack_channel_id,
+          threadTs, // If null, creates a new thread
           {
             author: commenterUsername,
+            authorSlackId: slackUserId,
             body: comment.body,
             url: comment.html_url,
-            diffHunk: comment.diff_hunk,
-            path: comment.path
+            path: comment.path,
+            line: lineNumber
           }
         );
-      }
-      
-      // Store the comment mapping for two-way sync
-      if (message && message.ts) {
-        await db.comments.create({
+        
+        // Store the comment with proper metadata
+        const newComment = await db.comments.create({
           id: uuidv4(),
           pr_id: pullRequest.id,
           github_comment_id: comment.id.toString(),
-          slack_thread_ts: inReplyTo ? inReplyTo.slack_thread_ts : message.ts,
+          slack_thread_ts: threadTs || message.ts, // Use review thread or new message's ts
+          slack_message_ts: message.ts, // Store the specific message timestamp
+          parent_comment_id: parentId,
           user_id: commenter.id,
           content: comment.body,
+          source: 'github',
+          comment_type: 'line_comment',
           created_at: new Date(comment.created_at).toISOString()
         });
+        
+        console.log(`[REVIEW COMMENT] Created line comment record with ID: ${newComment.id}`);
       }
     } else if (action === 'edited') {
       // Find the comment in our database
@@ -807,9 +1153,11 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
       );
       
       if (existingComment) {
+        console.log(`[REVIEW COMMENT] Updating existing comment: ${existingComment.id}`);
         // Update the comment content
         await db.comments.update(existingComment.id, {
-          content: comment.body
+          content: comment.body,
+          updated_at: new Date().toISOString()
         });
         
         // Send edit notification to Slack
@@ -831,10 +1179,124 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
       message: `Comment ${action} processed`
     };
   } catch (error) {
-    console.error('Error handling pull request review comment event:', error);
+    console.error('[REVIEW COMMENT] Error handling pull request review comment event:', error);
     throw error;
   }
 };
+
+// Helper function to get a valid GitHub token
+// Simple in-memory cache for tokens
+const tokenCache = new Map();
+
+const getAccessToken = async (org, repoFullName) => {
+  console.log(`[TOKEN] Getting GitHub access token for org: ${org.id}, repo: ${repoFullName}`);
+  
+  // Check cache first
+  const cacheKey = `org_${org.id}`;
+  const cachedToken = tokenCache.get(cacheKey);
+  if (cachedToken && cachedToken.expiresAt > new Date()) {
+    console.log(`[TOKEN] Using cached token valid until ${cachedToken.expiresAt}`);
+    return cachedToken.token;
+  }
+  
+  // Try to find an admin with a valid GitHub token
+  const { data: adminUsers } = await supabase
+    .from('users')
+    .select('*')
+    .eq('org_id', org.id)
+    .eq('is_admin', true)
+    .order('updated_at', { ascending: false });
+  
+  console.log(`[TOKEN] Found ${adminUsers?.length || 0} admin users`);
+  
+  for (const admin of adminUsers || []) {
+    if (admin.github_access_token) {
+      // Check if token is expired
+      const now = new Date();
+      const expiresAt = new Date(admin.github_token_expires_at);
+      
+      console.log(`[TOKEN] Admin ${admin.id} token expires: ${admin.github_token_expires_at}`);
+      
+      if (expiresAt > now) {
+        console.log(`[TOKEN] Using valid admin token from ${admin.id}`);
+        
+        // Cache the token
+        tokenCache.set(cacheKey, {
+          token: admin.github_access_token,
+          expiresAt: expiresAt
+        });
+        
+        return admin.github_access_token;
+      } else {
+        console.log(`[TOKEN] Admin ${admin.id} token is expired, attempting refresh`);
+        
+        // Try to refresh the token if we have a refresh token
+        if (admin.github_refresh_token) {
+          try {
+            const refreshedTokens = await githubService.refreshToken(admin.github_refresh_token);
+            
+            if (refreshedTokens && refreshedTokens.access_token) {
+              console.log(`[TOKEN] Successfully refreshed token for admin ${admin.id}`);
+              
+              // Update user tokens in database
+              await supabase
+                .from('users')
+                .update({
+                  github_access_token: refreshedTokens.access_token,
+                  github_token_expires_at: refreshedTokens.expires_at,
+                  github_refresh_token: refreshedTokens.refresh_token || admin.github_refresh_token,
+                  github_refresh_token_expires_at: refreshedTokens.refresh_token_expires_at || admin.github_refresh_token_expires_at
+                })
+                .eq('id', admin.id);
+              
+              // Cache the refreshed token
+              tokenCache.set(cacheKey, {
+                token: refreshedTokens.access_token,
+                expiresAt: new Date(refreshedTokens.expires_at)
+              });
+              
+              return refreshedTokens.access_token;
+            }
+          } catch (refreshError) {
+            console.error(`[TOKEN] Error refreshing token for admin ${admin.id}:`, refreshError);
+          }
+        }
+      }
+    }
+  }
+  
+  // If no valid admin token, use app installation token
+  console.log(`[TOKEN] No valid admin tokens, using app installation token: ${org.github_app_token ? 'available' : 'not available'}`);
+  
+  if (org.github_app_token) {
+    // Cache the app token too, with a shorter expiry
+    const appTokenExpiry = new Date();
+    appTokenExpiry.setHours(appTokenExpiry.getHours() + 1); // 1 hour cache
+    
+    tokenCache.set(cacheKey, {
+      token: org.github_app_token,
+      expiresAt: appTokenExpiry
+    });
+  }
+  
+  return org.github_app_token;
+};
+
+
+// This simple caching approach:
+
+// Stores tokens in memory with their expiry times
+// Checks the cache first before making database queries
+// Updates the cache when tokens are refreshed
+// Uses a shorter expiry for app tokens (which might be rotated externally)
+
+
+
+// Early filtering of duplicate 'edited' events
+// Proper comment counting for reviews with 'changes_requested' or 'approved' status
+// Logic to show summary messages instead of full review content in Slack
+// Maintenance of the two-way sync by storing comment mappings
+// Error handling for race conditions and duplicate events
 
 /**
  * Handle GitHub pull request comment event (issue_comment)
@@ -845,16 +1307,44 @@ const handlePullRequestCommentEvent = async (payload) => {
   try {
     const { action, repository, organization, issue, comment } = payload;
     
+    console.log(`[PR COMMENT] Processing PR comment event: ${action} for PR #${issue.number}, comment ID: ${comment.id}`);
+    
     // Only process created or edited comments
     if (!['created', 'edited'].includes(action)) {
+      console.log(`[PR COMMENT] Ignoring action: ${action}`);
       return {
         status: 'ignored',
         message: `Comment action '${action}' not handled`
       };
     }
+
+    // Check if this comment already exists in our db with source='slack'
+    const existingComment = await db.comments.findByGithubCommentId(
+      null, // We don't know the PR ID yet, will check all comments
+      comment.id.toString()
+    );
+    
+    // If comment exists and was from Slack, ignore it to prevent duplication
+    if (existingComment && existingComment.source === 'slack') {
+      console.log(`[PR COMMENT] Comment ${comment.id} originated from Slack, ignoring webhook to prevent duplication`);
+      return {
+        status: 'ignored',
+        message: 'Comment originated from Slack, ignoring to prevent duplication'
+      };
+    }
+
+    // Check if comment includes Slack marker
+    if (comment.body && comment.body.includes('<!-- SENT_FROM_SLACK -->')) {
+      console.log(`[PR COMMENT] Comment ${comment.id} has Slack marker, ignoring webhook`);
+      return {
+        status: 'ignored',
+        message: 'Comment originated from Slack, ignoring to prevent duplication'
+      };
+    }
     
     // Get organization from database
     let org = await db.organizations.findByGithubOrgId(organization?.id || repository.owner.id);
+    console.log(`[PR COMMENT] Found organization: ${org ? org.id : 'not found'}`);
     
     // If organization doesn't exist, we can't process this webhook
     if (!org) {
@@ -866,6 +1356,7 @@ const handlePullRequestCommentEvent = async (payload) => {
     
     // Find repository in database
     let repo = await db.repositories.findByGithubRepoId(org.id, repository.id);
+    console.log(`[PR COMMENT] Found repository: ${repo ? repo.id : 'not found'}`);
     
     // If repo doesn't exist or isn't active, ignore the webhook
     if (!repo || !repo.is_active) {
@@ -877,6 +1368,7 @@ const handlePullRequestCommentEvent = async (payload) => {
     
     // Find PR in database by issue number (for PR comments, issue number = PR number)
     const pullRequest = await db.pullRequests.findByPrNumber(repo.id, issue.number);
+    console.log(`[PR COMMENT] Found PR: ${pullRequest ? pullRequest.id : 'not found'}`);
     
     if (!pullRequest) {
       return {
@@ -888,6 +1380,7 @@ const handlePullRequestCommentEvent = async (payload) => {
     // Find the commenter
     const commenterUsername = comment.user.login;
     let commenter = await db.users.findByGithubUsername(org.id, commenterUsername);
+    console.log(`[PR COMMENT] Found commenter: ${commenter ? commenter.id : 'not found'}`);
     
     if (!commenter) {
       // Create a placeholder user record
@@ -897,17 +1390,32 @@ const handlePullRequestCommentEvent = async (payload) => {
         github_username: commenterUsername,
         is_admin: false
       });
+      console.log(`[PR COMMENT] Created new commenter: ${commenter.id}`);
     }
+    
+    // Get Slack user ID for mention if available
+    let slackUserId = null;
+    if (commenter && commenter.slack_user_id) {
+      slackUserId = commenter.slack_user_id;
+    }
+    
+    // Determine if this is a reply to another PR comment
+    const isReply = comment.in_reply_to_id !== undefined || 
+                    (comment.body && comment.body.includes('Re: [comment]'));
+    console.log(`[PR COMMENT] Is this a reply? ${isReply ? 'Yes' : 'No'}`);
     
     let message;
     
     if (action === 'created') {
+      console.log(`[PR COMMENT] Sending new PR comment to Slack`);
+      
       // This is a new comment
       message = await slackService.sendPrCommentMessage(
         org.slack_bot_token,
         pullRequest.slack_channel_id,
         {
           author: commenterUsername,
+          authorSlackId: slackUserId,
           body: comment.body,
           url: comment.html_url
         }
@@ -915,17 +1423,26 @@ const handlePullRequestCommentEvent = async (payload) => {
       
       // Store the comment mapping for two-way sync
       if (message && message.ts) {
-        await db.comments.create({
+        const newComment = await db.comments.create({
           id: uuidv4(),
           pr_id: pullRequest.id,
           github_comment_id: comment.id.toString(),
           slack_thread_ts: message.ts,
+          slack_message_ts: message.ts, // For PR comments, these are the same
           user_id: commenter.id,
           content: comment.body,
+          source: 'github',
+          comment_type: 'pr_comment',
           created_at: new Date(comment.created_at).toISOString()
         });
+        
+        console.log(`[PR COMMENT] Created PR comment record with ID: ${newComment.id}`);
+      } else {
+        console.log(`[PR COMMENT] Failed to get Slack message TS`);
       }
     } else if (action === 'edited') {
+      console.log(`[PR COMMENT] Processing edited PR comment`);
+      
       // Find the comment in our database
       const existingComment = await db.comments.findByGithubCommentId(
         pullRequest.id,
@@ -933,9 +1450,12 @@ const handlePullRequestCommentEvent = async (payload) => {
       );
       
       if (existingComment) {
+        console.log(`[PR COMMENT] Updating existing comment: ${existingComment.id}`);
+        
         // Update the comment content
         await db.comments.update(existingComment.id, {
-          content: comment.body
+          content: comment.body,
+          updated_at: new Date().toISOString()
         });
         
         // Send edit notification to Slack
@@ -949,15 +1469,21 @@ const handlePullRequestCommentEvent = async (payload) => {
             url: comment.html_url
           }
         );
+        
+        console.log(`[PR COMMENT] Sent edit notification to Slack`);
+      } else {
+        console.log(`[PR COMMENT] Could not find comment in database for edit`);
       }
     }
+    
+    console.log(`[PR COMMENT] Successfully processed PR comment ${comment.id}`);
     
     return {
       status: 'success',
       message: `PR comment ${action} processed`
     };
   } catch (error) {
-    console.error('Error handling pull request comment event:', error);
+    console.error('[PR COMMENT] Error handling pull request comment event:', error);
     throw error;
   }
 };
@@ -970,9 +1496,14 @@ const handlePullRequestCommentEvent = async (payload) => {
  */
 const processReviewRequest = async (org, pullRequest, reviewerUsername) => {
   try {
+    console.log('Processing review request for:', reviewerUsername);
+    console.log('Slack channel ID:', pullRequest.slack_channel_id);
+
     // Find or create reviewer user
     let reviewer = await db.users.findByGithubUsername(org.id, reviewerUsername);
     
+    console.log('Reviewer data:', reviewer);
+
     if (!reviewer) {
       // Create a placeholder user record
       reviewer = await db.users.create({

@@ -69,14 +69,14 @@ const handleAppInstallCallback = async (req, res) => {
         });
       }
       
-      // Create GitHub connection for the organization
-      await db.githubConnections.create({
-        org_id: orgId,
-        github_user_id: installation.account.id.toString(),
-        github_username: installation.account.login,
-        access_token: 'app_installation_token', // This is a placeholder as we're using app auth
-        is_connected: true
-      });
+      // // Create GitHub connection for the organization
+      // await db.githubConnections.create({
+      //   org_id: orgId,
+      //   github_user_id: installation.account.id.toString(),
+      //   github_username: installation.account.login,
+      //   access_token: 'app_installation_token', // This is a placeholder as we're using app auth
+      //   is_connected: true
+      // });
       
       // Redirect to next step
       res.redirect(`/onboarding?step=slack&orgId=${orgId}`);

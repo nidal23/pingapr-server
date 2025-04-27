@@ -1,3 +1,5 @@
+//src/services/slack/channels
+
 /**
  * Slack channels service
  * Handles creation and management of Slack channels
@@ -73,16 +75,23 @@ const inviteUserToChannel = async (token, channelId, userId) => {
       channel: channelId,
       users: userId
     });
+
+    console.log('Inviting user to channel:', userId, 'to channel:', channelId);
     
     return response;
   } catch (error) {
-    // Don't fail if user is already in channel
+    // Properly handle Slack errors
     if (error.data && error.data.error === 'already_in_channel') {
+      console.log(`User ${userId} is already in channel ${channelId}`);
       return { ok: true, already_in_channel: true };
     }
     
+    // Log more details about the error
     console.error('Error inviting user to channel:', error);
-    throw error;
+    console.error('Error details:', JSON.stringify(error, null, 2));
+    
+    // Be more lenient with errors to avoid breaking the flow
+    return { ok: false, error: error.message };
   }
 };
 

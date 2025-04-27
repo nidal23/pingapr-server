@@ -94,6 +94,7 @@ const slackAuth = {
       throw error;
     }
   },
+
   
   // Get users from Slack workspace
   async getUsers(orgId) {
@@ -134,7 +135,36 @@ const slackAuth = {
       console.error('Error getting Slack users:', error);
       throw error;
     }
+  },
+
+
+    async sendErrorMessage(token, channelId, threadTs, message) {
+      
+    try {
+      const client = new WebClient(token);
+      
+      const result = await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `:warning: ${message}`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `:warning: ${message}`
+            }
+          }
+        ]
+      });
+      
+      return result;
+    } catch (error) {
+      console.error('Error sending Slack error message:', error);
+      throw error;
+    }
   }
+
 };
 
 module.exports = slackAuth;

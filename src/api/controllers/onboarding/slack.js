@@ -32,15 +32,15 @@ const handleOAuthCallback = async (req, res) => {
         slack_bot_token: result.access_token
       });
       
-      // Create Slack connection for the organization
-      await db.slackConnections.create({
-        org_id: orgId,
-        team_id: result.team.id,
-        team_name: result.team.name,
-        access_token: result.access_token,
-        bot_user_id: result.bot_user_id,
-        is_connected: true
-      });
+      // // Create Slack connection for the organization
+      // await db.slackConnections.create({
+      //   org_id: orgId,
+      //   team_id: result.team.id,
+      //   team_name: result.team.name,
+      //   access_token: result.access_token,
+      //   bot_user_id: result.bot_user_id,
+      //   is_connected: true
+      // });
       
       // Redirect to user mapping step
       res.redirect(`/onboarding?step=user-mapping&orgId=${orgId}`);

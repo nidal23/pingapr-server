@@ -151,6 +151,97 @@ const githubAuth = {
       throw error;
     }
   },
+
+  async getInstallationToken(installationId) {
+    try {
+      console.log(`[GITHUB AUTH] Getting installation token for installation ID: ${installationId}`);
+      
+      // Skip if not a valid installation ID
+      if (!installationId || installationId === 'direct_oauth') {
+        console.log('[GITHUB AUTH] No valid installation ID provided');
+        return null;
+      }
+      
+      const { createAppAuth } = await import('@octokit/auth-app');
+      
+      const auth = createAppAuth({
+        appId: process.env.GITHUB_APP_ID,
+        privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        clientId: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET
+      });
+      
+      // Request an installation token
+      const installationAuthentication = await auth({
+        type: "installation",
+        installationId
+      });
+      
+      console.log(`[GITHUB AUTH] Successfully got installation token`);
+      return installationAuthentication.token;
+    } catch (error) {
+      console.error('[GITHUB AUTH] Error getting installation token:', error);
+      return null;
+    }
+  },
+
+  /**
+ * Get a valid token for GitHub API access
+ * @param {string} orgId - Organization ID
+ * @returns {Promise<string>} GitHub API token
+ */
+async  getAccessToken(orgId) {
+  try {
+    console.log(`[GITHUB AUTH] Getting access token for org: ${orgId}`);
+    
+    // Get organization details
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('github_installation_id')
+      .eq('id', orgId)
+      .single();
+    
+    if (!org) {
+      console.log('[GITHUB AUTH] Organization not found');
+      return null;
+    }
+    
+    // Use installation token if available
+    if (org.github_installation_id && org.github_installation_id !== 'direct_oauth') {
+      // Use this.getInstallationToken instead of just getInstallationToken
+      return await this.getInstallationToken(org.github_installation_id);
+    }
+    
+    
+    // Fallback to user token if no installation
+    console.log('[GITHUB AUTH] No installation found, checking for user tokens');
+    
+    const { data: adminUsers } = await supabase
+      .from('users')
+      .select('*')
+      .eq('org_id', orgId)
+      .eq('is_admin', true)
+      .order('updated_at', { ascending: false });
+    
+    for (const admin of adminUsers || []) {
+      if (admin.github_access_token) {
+        const now = new Date();
+        const expiresAt = new Date(admin.github_token_expires_at);
+        
+        if (expiresAt > now) {
+          console.log(`[GITHUB AUTH] Using valid admin token`);
+          return admin.github_access_token;
+        }
+      }
+    }
+    
+    console.log('[GITHUB AUTH] No valid tokens found');
+    return null;
+  } catch (error) {
+    console.error('[GITHUB AUTH] Error getting access token:', error);
+    return null;
+  }
+},
   
   // Fetch and save repositories
   async fetchAndSaveRepositories(accessToken, orgId) {

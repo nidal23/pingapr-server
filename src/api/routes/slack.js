@@ -1,11 +1,12 @@
 // src/api/routes/slack.js
 const express = require('express');
 const router = express.Router();
-// const slackEventController = require('../controllers/slack/events');
+const slackEventController = require('../controllers/slack/events');
 // const slackInteractionController = require('../controllers/slack/interactions');
 // const slackCommandController = require('../controllers/slack/commands');
 const slackController = require('../controllers/slack/auth');
-const { verifyJWT } = require('../../middleware/auth');
+const { verifySlackRequest } = require('../../middleware/slack-verify');
+const { verifyJWT } = require('../../middleware/auth')
 const slackNotificationController = require('../controllers/slack/notifications')
 
 //Slack related Auth
@@ -19,7 +20,7 @@ router.get('/users', verifyJWT, slackController.getUsers);
 
 
 // Handle Slack events (messages, etc.)
-// router.post('/events', verifyJWT, slackEventController.handleEvents);
+router.post('/events', verifySlackRequest, slackEventController.handleEvents);
 
 // Handle Slack interactive components (buttons, menus, etc.)
 router.post('/send-invitations', verifyJWT, slackNotificationController.sendTeamInvitations);
