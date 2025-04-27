@@ -666,19 +666,42 @@ const comments = {
    * @param {string} githubCommentId - GitHub comment ID
    * @returns {Promise<Object>} Comment data
    */
+  // In your db.comments.js file
   async findByGithubCommentId(prId, githubCommentId) {
-    const { data, error } = await supabase
-      .from('comments')
-      .select(`
-        *,
-        user:user_id(id, github_username, slack_user_id)
-      `)
-      .eq('pr_id', prId)
-      .eq('github_comment_id', githubCommentId)
-      .single();
-    
-    if (error && error.code !== 'PGRST116') throw error;
-    return data;
+    try {
+      console.log(`Finding comment by github_comment_id: ${githubCommentId}, prId: ${prId || 'any'}`);
+      
+      let query = supabase
+        .from('comments')
+        .select(`
+          *,
+          user:user_id(id, github_username, slack_user_id)
+        `)
+        .eq('github_comment_id', githubCommentId);
+      
+      // Add PR filter only if provided
+      if (prId) {
+        query = query.eq('pr_id', prId);
+      }
+      
+      const { data, error } = await query.maybeSingle();
+      
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error in findByGithubCommentId:', error);
+        throw error;
+      }
+      
+      if (data) {
+        console.log(`Found comment with ID: ${data.id}, source: ${data.source || 'unknown'}`);
+      } else {
+        console.log(`No comment found for github_comment_id: ${githubCommentId}`);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Error finding comment by GitHub comment ID:', error);
+      throw error;
+    }
   },
   
   /**
@@ -687,20 +710,139 @@ const comments = {
    * @returns {Promise<Object>} Comment data
    */
   async findByThreadTs(threadTs) {
-    const { data, error } = await supabase
-      .from('comments')
-      .select(`
-        *,
-        pull_request:pr_id(*),
-        user:user_id(*)
-      `)
-      .eq('slack_thread_ts', threadTs)
-      .single();
-    
-    if (error && error.code !== 'PGRST116') throw error;
-    return data;
+    try {
+      console.log(`Finding comment by thread_ts: ${threadTs}`);
+      
+      // First try to find a review summary with this thread_ts
+      const { data: reviewSummary, error: reviewError } = await supabase
+        .from('comments')
+        .select(`
+          *,
+          pull_request:pr_id(
+            *,
+            repository:repo_id(*)
+          ),
+          user:user_id(*)
+        `)
+        .eq('slack_thread_ts', threadTs)
+        .eq('comment_type', 'review_summary')
+        .single();
+      
+      // If we found a review summary, return it
+      if (reviewSummary) {
+        console.log(`Found review summary comment with ID: ${reviewSummary.id}`);
+        return reviewSummary;
+      }
+      
+      // If no review summary, look for any comment with this thread_ts
+      // Try to find a comment where slack_message_ts matches the thread_ts
+      const { data: messageComment, error: messageError } = await supabase
+        .from('comments')
+        .select(`
+          *,
+          pull_request:pr_id(
+            *,
+            repository:repo_id(*)
+          ),
+          user:user_id(*)
+        `)
+        .eq('slack_message_ts', threadTs)
+        .single();
+      
+      if (messageComment) {
+        console.log(`Found comment with ID: ${messageComment.id} by slack_message_ts match`);
+        return messageComment;
+      }
+      
+      // As a fallback, try to find any comment with this thread_ts
+      const { data: anyComment, error: anyError } = await supabase
+        .from('comments')
+        .select(`
+          *,
+          pull_request:pr_id(
+            *,
+            repository:repo_id(*)
+          ),
+          user:user_id(*)
+        `)
+        .eq('slack_thread_ts', threadTs)
+        .order('created_at', { ascending: false })
+        .single();
+      
+      if (anyComment) {
+        console.log(`Found comment with ID: ${anyComment.id} as fallback`);
+        return anyComment;
+      }
+      
+      console.log('No comment found for thread timestamp');
+      return null;
+    } catch (error) {
+      console.error('Error finding comment by thread timestamp:', error);
+      throw error;
+    }
   },
+
+
+  /**
+ * Update or create a comment
+ * @param {string} prId - Pull request UUID
+ * @param {string} githubCommentId - GitHub comment ID
+ * @param {Object} data - Comment data
+ * @returns {Promise<Object>} Created or updated comment
+ */
+async upsert(prId, githubCommentId, data) {
+  try {
+    const existingComment = await this.findByGithubCommentId(prId, githubCommentId);
+    
+    if (existingComment) {
+      return this.update(existingComment.id, {
+        ...data,
+        updated_at: new Date().toISOString()
+      });
+    } else {
+      return this.create({
+        id: uuidv4(),
+        pr_id: prId,
+        github_comment_id: githubCommentId,
+        ...data
+      });
+    }
+  } catch (error) {
+    console.error('Error upserting comment:', error);
+    throw error;
+  }
+},
   
+
+  /**
+   * Update a comment
+   * @param {string} id - Comment UUID
+   * @param {Object} data - Updated comment data
+   * @returns {Promise<Object>} Updated comment
+   */
+  async update(id, data) {
+    try {
+      console.log(`Updating comment ${id} with data:`, data);
+      
+      const { data: updatedComment, error } = await supabase
+        .from('comments')
+        .update({
+          ...data,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      return updatedComment;
+    } catch (error) {
+      console.error('Error updating comment:', error);
+      throw error;
+    }
+  },
+
   /**
    * Create a new comment
    * @param {Object} comment - Comment data
@@ -737,117 +879,116 @@ const comments = {
   }
 };
 
-const githubConnections = {
-    /**
-     * Find connection by organization ID
-     * @param {string} orgId - Organization UUID
-     * @returns {Promise<Object>} GitHub connection data
-     */
-    async findByOrgId(orgId) {
-      const { data, error } = await supabase
-        .from('github_connections')
-        .select('*')
-        .eq('org_id', orgId)
-        .single();
+// const githubConnections = {
+//     /**
+//      * Find connection by organization ID
+//      * @param {string} orgId - Organization UUID
+//      * @returns {Promise<Object>} GitHub connection data
+//      */
+//     async findByOrgId(orgId) {
+//       const { data, error } = await supabase
+//         .from('github_connections')
+//         .select('*')
+//         .eq('org_id', orgId)
+//         .single();
       
-      if (error && error.code !== 'PGRST116') throw error;
-      return data;
-    },
+//       if (error && error.code !== 'PGRST116') throw error;
+//       return data;
+//     },
     
-    /**
-     * Create a new GitHub connection
-     * @param {Object} connection - Connection data
-     * @returns {Promise<Object>} Created connection
-     */
-    async create(connection) {
-      const { data, error } = await supabase
-        .from('github_connections')
-        .insert(connection)
-        .select()
-        .single();
+//     /**
+//      * Create a new GitHub connection
+//      * @param {Object} connection - Connection data
+//      * @returns {Promise<Object>} Created connection
+//      */
+//     async create(connection) {
+//       const { data, error } = await supabase
+//         .from('github_connections')
+//         .insert(connection)
+//         .select()
+//         .single();
       
-      if (error) throw error;
-      return data;
-    },
+//       if (error) throw error;
+//       return data;
+//     },
     
-    /**
-     * Update a GitHub connection
-     * @param {string} id - Connection UUID
-     * @param {Object} updates - Fields to update
-     * @returns {Promise<Object>} Updated connection
-     */
-    async update(id, updates) {
-      const { data, error } = await supabase
-        .from('github_connections')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single();
+//     /**
+//      * Update a GitHub connection
+//      * @param {string} id - Connection UUID
+//      * @param {Object} updates - Fields to update
+//      * @returns {Promise<Object>} Updated connection
+//      */
+//     async update(id, updates) {
+//       const { data, error } = await supabase
+//         .from('github_connections')
+//         .update(updates)
+//         .eq('id', id)
+//         .select()
+//         .single();
       
-      if (error) throw error;
-      return data;
-    }
-  };
+//       if (error) throw error;
+//       return data;
+//     }
+//   };
 
 
-  const slackConnections = {
-    /**
-     * Find connection by organization ID
-     * @param {string} orgId - Organization UUID
-     * @returns {Promise<Object>} Slack connection data
-     */
-    async findByOrgId(orgId) {
-        const { data, error } = await supabase
-          .from('slack_connections')
-          .select('*')
-          .eq('org_id', orgId)
-          .single();
+  // const slackConnections = {
+  //   /**
+  //    * Find connection by organization ID
+  //    * @param {string} orgId - Organization UUID
+  //    * @returns {Promise<Object>} Slack connection data
+  //    */
+  //   async findByOrgId(orgId) {
+  //       const { data, error } = await supabase
+  //         .from('slack_connections')
+  //         .select('*')
+  //         .eq('org_id', orgId)
+  //         .single();
         
-        if (error && error.code !== 'PGRST116') throw error;
-        return data;
-      },
+  //       if (error && error.code !== 'PGRST116') throw error;
+  //       return data;
+  //     },
       
-      /**
-       * Create a new Slack connection
-       * @param {Object} connection - Connection data
-       * @returns {Promise<Object>} Created connection
-       */
-      async create(connection) {
-        const { data, error } = await supabase
-          .from('slack_connections')
-          .insert(connection)
-          .select()
-          .single();
+  //     /**
+  //      * Create a new Slack connection
+  //      * @param {Object} connection - Connection data
+  //      * @returns {Promise<Object>} Created connection
+  //      */
+  //     async create(connection) {
+  //       const { data, error } = await supabase
+  //         .from('slack_connections')
+  //         .insert(connection)
+  //         .select()
+  //         .single();
         
-        if (error) throw error;
-        return data;
-      },
+  //       if (error) throw error;
+  //       return data;
+  //     },
       
-      /**
-       * Update a Slack connection
-       * @param {string} id - Connection UUID
-       * @param {Object} updates - Fields to update
-       * @returns {Promise<Object>} Updated connection
-       */
-      async update(id, updates) {
-        const { data, error } = await supabase
-          .from('slack_connections')
-          .update(updates)
-          .eq('id', id)
-          .select()
-          .single();
+  //     /**
+  //      * Update a Slack connection
+  //      * @param {string} id - Connection UUID
+  //      * @param {Object} updates - Fields to update
+  //      * @returns {Promise<Object>} Updated connection
+  //      */
+  //     async update(id, updates) {
+  //       const { data, error } = await supabase
+  //         .from('slack_connections')
+  //         .update(updates)
+  //         .eq('id', id)
+  //         .select()
+  //         .single();
         
-        if (error) throw error;
-        return data;
-      }
-  }
+  //       if (error) throw error;
+  //       return data;
+  //     }
+  // }
 
 module.exports = {
     organizations,
     repositories,
     users,
-    githubConnections,
-    slackConnections,
+    // githubConnections,
     pullRequests,
     reviewRequests,
     comments

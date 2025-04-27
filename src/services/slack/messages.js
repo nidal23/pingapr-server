@@ -1,9 +1,171 @@
+//src/services/slack/messages
 /**
  * Slack messaging service
  * Handles formatting and sending messages to Slack
  */
 const { WebClient } = require('@slack/web-api');
 const { truncateText, formatCodeBlock } = require('../../utils/formatting');
+
+/**
+ * Format code snippets for better display in Slack using rich text blocks
+ * @param {string} body - Comment body that may contain code
+ * @returns {Array} Array of blocks with code properly formatted
+ */
+const formatCodeSnippets = (body) => {
+  if (!body) return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "_No content_"
+      }
+    }
+  ];
+  
+  // If there are no code blocks or inline code, return simple text
+  if (!body.includes('`')) {
+    return [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: body
+        }
+      }
+    ];
+  }
+  
+  // Check if the body contains code blocks (```)
+  if (body.includes('```')) {
+    // Extract code blocks and regular text
+    const parts = [];
+    let currentIndex = 0;
+    const codeBlockRegex = /```(?:\w*\n|\n)?([^```]+)```/g;
+    
+    let match;
+    while ((match = codeBlockRegex.exec(body)) !== null) {
+      // Add text before code block if any
+      const precedingText = body.substring(currentIndex, match.index).trim();
+      if (precedingText) {
+        parts.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: precedingText
+          }
+        });
+      }
+      
+      // Add code block
+      parts.push({
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_preformatted",
+            elements: [
+              {
+                type: "text",
+                text: match[1].trim()
+              }
+            ]
+          }
+        ]
+      });
+      
+      currentIndex = match.index + match[0].length;
+    }
+    
+    // Add any remaining text
+    const remainingText = body.substring(currentIndex).trim();
+    if (remainingText) {
+      parts.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: remainingText
+        }
+      });
+    }
+    
+    return parts;
+  }
+  
+  // Handle inline code
+  if (body.includes('`') && !body.includes('```')) {
+    const parts = [];
+    let currentIndex = 0;
+    const inlineCodeRegex = /`([^`]+)`/g;
+    
+    let match;
+    while ((match = inlineCodeRegex.exec(body)) !== null) {
+      // Add text before code if any
+      const precedingText = body.substring(currentIndex, match.index).trim();
+      if (precedingText) {
+        parts.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: precedingText
+          }
+        });
+      }
+      
+      // For short inline code (less than 40 chars), keep it inline
+      if (match[1].length < 40) {
+        parts.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: '`' + match[1] + '`'
+          }
+        });
+      } else {
+        // For longer code snippets, use preformatted block
+        parts.push({
+          type: "rich_text",
+          elements: [
+            {
+              type: "rich_text_preformatted",
+              elements: [
+                {
+                  type: "text",
+                  text: match[1].trim()
+                }
+              ]
+            }
+          ]
+        });
+      }
+      
+      currentIndex = match.index + match[0].length;
+    }
+    
+    // Add any remaining text
+    const remainingText = body.substring(currentIndex).trim();
+    if (remainingText) {
+      parts.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: remainingText
+        }
+      });
+    }
+    
+    return parts;
+  }
+  
+  // Default case - no code formatting needed
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: body
+      }
+    }
+  ];
+};
 
 /**
  * Send a PR opened message to Slack
@@ -14,58 +176,163 @@ const { truncateText, formatCodeBlock } = require('../../utils/formatting');
  */
 const sendPrOpenedMessage = async (token, channelId, pr) => {
   const client = new WebClient(token);
-  
-  // Format labels if present
-  const labelsText = pr.labels && pr.labels.length > 0
-    ? `\n*Labels:* ${pr.labels.join(', ')}`
-    : '';
-  
-  // Truncate description if too long
-  const description = pr.description ? truncateText(pr.description, 300) : '_No description provided_';
-  
+
   try {
-    return await client.chat.postMessage({
-      channel: channelId,
-      blocks: [
+    // Extract PR number for display
+    const prNumber = pr.url.split('/').pop();
+    
+    // Format the PR description
+    const description = pr.description ? formatCodeSnippets(pr.description) : '_No description provided_';
+    
+    // Format the author with Slack mention if available
+    const authorText = pr.author && pr.author.slack_user_id  
+      ? `<@${pr.author.slack_user_id}>` 
+      : pr.author.github_username;
+    
+    // Format the labels if present with visual styling
+    let labelsBlock = null;
+    if (pr.labels && pr.labels.length > 0) {
+      const formattedLabels = pr.labels.map(label => `\`${label}\``).join(' ');
+      labelsBlock = {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:bookmark: *Labels:* ${formattedLabels}`
+          }
+        ]
+      };
+    }
+    
+    // Create the blocks array with improved structure and valid emojis
+    const blocks = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `:arrow_heading_up: Pull Request #${prNumber}`,
+          emoji: true
+        }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<${pr.url}|${pr.title}>*`
+        }
+      },
+      {
+        type: "divider"
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:file_folder: *Repository:* ${pr.repoName}`
+          }
+        ]
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:bust_in_silhouette: *Author:* ${authorText}`
+          }
+        ]
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:clipboard: *Changes:* \`+${pr.additions} -${pr.deletions}\` in ${pr.changedFiles} files`
+          }
+        ]
+      }
+    ];
+    
+    // Add labels block if present
+    if (labelsBlock) {
+      blocks.push(labelsBlock);
+    }
+    
+    // Add reviewers section if there are reviewers
+    if (pr.reviewers && pr.reviewers.length > 0) {
+      const reviewerMentions = pr.reviewers.map(reviewer => {
+        if (reviewer.slackUserId) {
+          return `<@${reviewer.slackUserId}>`;
+        }
+        return reviewer.githubUsername;
+      });
+      
+      blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:eyes: *Reviewers:* ${reviewerMentions.join(', ')}`
+          }
+        ]
+      });
+      
+      // Add a more informative message about the review request
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `:loudspeaker: ${authorText} has opened this PR and requested a code review. Please take a look when you have a moment!`
+        }
+      });
+    }
+    
+    // Add description with heading
+    blocks.push(
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Description:*\n${description}`
+        }
+      }
+    );
+    
+    // Add divider before actions
+    blocks.push({
+      type: "divider"
+    });
+    
+    // Add action buttons with multiple options and valid emojis
+    blocks.push({
+      type: "actions",
+      elements: [
         {
-          type: "header",
+          type: "button",
           text: {
             type: "plain_text",
-            text: `New PR: ${pr.title}`,
+            text: ":link: View PR",
             emoji: true
-          }
+          },
+          url: pr.url,
+          style: "primary"
         },
         {
-          type: "section",
+          type: "button",
           text: {
-            type: "mrkdwn",
-            text: `*Repository:* ${pr.repoName}\n*Author:* ${pr.author}\n*Changes:* +${pr.additions} -${pr.deletions} (${pr.changedFiles} files)${labelsText}`
-          }
-        },
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: description
-          }
-        },
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "View on GitHub",
-                emoji: true
-              },
-              url: pr.url,
-              action_id: "view_pr"
-            }
-          ]
+            type: "plain_text",
+            text: ":mag: View Files",
+            emoji: true
+          },
+          url: `${pr.url}/files`
         }
-      ],
-      text: `New PR: ${pr.title} by ${pr.author}`
+      ]
+    });
+    
+    return await client.chat.postMessage({
+      channel: channelId,
+      blocks: blocks,
+      text: `PR #${prNumber}: ${pr.title} opened by ${pr.author.github_username}` // Fallback text for notifications
     });
   } catch (error) {
     console.error('Error sending PR opened message to Slack:', error);
@@ -84,25 +351,51 @@ const sendPrClosedMessage = async (token, channelId, pr) => {
   const client = new WebClient(token);
   
   const status = pr.merged ? 'merged' : 'closed';
-  const emoji = pr.merged ? ':merged:' : ':x:';
+  const emoji = pr.merged ? ':tada:' : ':x:';
+  const color = pr.merged ? '#6f42c1' : '#cb2431';
   
   try {
     return await client.chat.postMessage({
       channel: channelId,
       blocks: [
         {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `${emoji} Pull Request ${status.toUpperCase()}`,
+            emoji: true
+          }
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${emoji} Pull request *${pr.title}* has been ${status} by *${pr.closedBy}*`
+            text: `*<${pr.url}|${pr.title}>* has been ${status} by ${pr.closedBy}`
           }
+        },
+        {
+          type: "divider"
         },
         {
           type: "context",
           elements: [
             {
               type: "mrkdwn",
-              text: `This channel will be archived in a few days per organization settings.`
+              text: `:information_source: This channel will be archived in a few days per organization settings.`
+            }
+          ]
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":link: View PR",
+                emoji: true
+              },
+              url: pr.url
             }
           ]
         }
@@ -130,11 +423,22 @@ const sendPrReopenedMessage = async (token, channelId, pr) => {
       channel: channelId,
       blocks: [
         {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `:recycle: Pull Request REOPENED`,
+            emoji: true
+          }
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:recycle: Pull request *${pr.title}* has been reopened by *${pr.reopenedBy}*`
+            text: `*<${pr.url}|${pr.title}>* has been reopened by ${pr.reopenedBy}`
           }
+        },
+        {
+          type: "divider"
         },
         {
           type: "actions",
@@ -143,11 +447,20 @@ const sendPrReopenedMessage = async (token, channelId, pr) => {
               type: "button",
               text: {
                 type: "plain_text",
-                text: "View on GitHub",
+                text: ":link: View PR",
                 emoji: true
               },
               url: pr.url,
-              action_id: "view_pr"
+              style: "primary"
+            },
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":mag: View Files",
+                emoji: true
+              },
+              url: `${pr.url}/files`
             }
           ]
         }
@@ -175,11 +488,64 @@ const sendPrUpdatedMessage = async (token, channelId, pr) => {
       channel: channelId,
       blocks: [
         {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `:arrows_counterclockwise: PR Updated with New Commits`,
+            emoji: true
+          }
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:pencil2: *${pr.updatedBy}* updated pull request *${pr.title}* with new commits\n*Changes:* +${pr.additions} -${pr.deletions} (${pr.changedFiles} files)`
+            text: `*<${pr.url}|${pr.title}>*`
           }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Updated by:* ${pr.updatedBy}`
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:clipboard: *Changes:* \`+${pr.additions} -${pr.deletions}\` in ${pr.changedFiles} files`
+            }
+          ]
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":link: View PR",
+                emoji: true
+              },
+              url: pr.url,
+              style: "primary"
+            },
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":mag: View Files",
+                emoji: true
+              },
+              url: `${pr.url}/files`
+            }
+          ]
         }
       ],
       text: `PR updated: ${pr.title} by ${pr.updatedBy}`
@@ -211,14 +577,57 @@ const sendPrEditedMessage = async (token, channelId, pr) => {
       channel: channelId,
       blocks: [
         {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `:pencil2: PR Details Edited`,
+            emoji: true
+          }
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:pencil: *${pr.editedBy}* edited pull request ${changesText}\n*Title:* ${pr.title}`
+            text: `*<${pr.url}|${pr.title}>*`
           }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Edited by:* ${pr.editedBy}`
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:page_with_curl: *Changed parts:* ${changesText}`
+            }
+          ]
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":link: View PR",
+                emoji: true
+              },
+              url: pr.url
+            }
+          ]
         }
       ],
-      text: `PR edited: ${pr.title} by ${pr.editedBy}`
+      text: `PR edited: ${pr.title} by ${pr.editedBy} (${changesText} changed)`
     });
   } catch (error) {
     console.error('Error sending PR edited message to Slack:', error);
@@ -246,14 +655,56 @@ const sendReviewRequestedMessage = async (token, channelId, data) => {
       channel: channelId,
       blocks: [
         {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `:eyes: Review Requested`,
+            emoji: true
+          }
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:eyes: Review requested from ${reviewerMention}`
+            text: `*<${data.url}|${data.title}>*`
           }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Reviewer:* ${reviewerMention}`
+            }
+          ]
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `:loudspeaker: ${data.requestedBy} has requested your review on this PR. Please take a look when you have a moment!`
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":link: View PR",
+                emoji: true
+              },
+              url: data.url,
+              style: "primary"
+            }
+          ]
         }
       ],
-      text: `Review requested from ${data.reviewer}`
+      text: `Review requested from ${data.reviewer} for PR: ${data.title}`
     });
   } catch (error) {
     console.error('Error sending review requested message to Slack:', error);
@@ -276,63 +727,40 @@ const sendReviewRequestRemovedMessage = async (token, channelId, data) => {
       channel: channelId,
       blocks: [
         {
-          type: "section",
+          type: "header",
           text: {
-            type: "mrkdwn",
-            text: `:no_entry_sign: *${data.removedBy}* removed review request for *${data.reviewer}*`
-          }
-        }
-      ],
-      text: `Review request removed for ${data.reviewer}`
-    });
-  } catch (error) {
-    console.error('Error sending review request removed message to Slack:', error);
-    throw error;
-  }
-};
-
-/**
- * Send a PR review message to Slack
- * @param {string} token - Slack bot token
- * @param {string} channelId - Slack channel ID
- * @param {Object} data - Review data
- * @returns {Promise<Object>} Slack message response
- */
-const sendReviewMessage = async (token, channelId, data) => {
-  const client = new WebClient(token);
-  
-  let emoji, actionText;
-  switch (data.state) {
-    case 'approved':
-      emoji = ':white_check_mark:';
-      actionText = 'approved';
-      break;
-    case 'changes_requested':
-      emoji = ':x:';
-      actionText = 'requested changes on';
-      break;
-    default:
-      emoji = ':speech_balloon:';
-      actionText = 'commented on';
-  }
-  
-  try {
-    return await client.chat.postMessage({
-      channel: channelId,
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `${emoji} *${data.reviewer}* ${actionText} pull request`
+            type: "plain_text",
+            text: `:no_entry_sign: Review Request Removed`,
+            emoji: true
           }
         },
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: data.body
+            text: `*<${data.url}|${data.title}>*`
           }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Removed by:* ${data.removedBy}`
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Reviewer:* ${data.reviewer}`
+            }
+          ]
+        },
+        {
+          type: "divider"
         },
         {
           type: "actions",
@@ -341,20 +769,192 @@ const sendReviewMessage = async (token, channelId, data) => {
               type: "button",
               text: {
                 type: "plain_text",
-                text: "View on GitHub",
+                text: ":link: View PR",
                 emoji: true
               },
-              url: data.url,
-              action_id: "view_review"
+              url: data.url
             }
           ]
         }
       ],
-      text: `${data.reviewer} ${actionText} pull request: ${data.title}`
+      text: `Review request removed for ${data.reviewer} by ${data.removedBy}`
     });
+  } catch (error) {
+    console.error('Error sending review request removed message to Slack:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a review message to Slack with rich text code formatting
+ * @param {string} token - Slack bot token
+ * @param {string} channelId - Slack channel ID
+ * @param {object} review - Review data
+ * @returns {Promise<object>} Slack message response
+ */
+const sendReviewMessage = async (token, channelId, review) => {
+  try {
+    const client = new WebClient(token);
+    const { 
+      title, 
+      url, 
+      reviewer, 
+      reviewerSlackId, 
+      state, 
+      body, 
+      commentCount = 0, 
+      prNumber 
+    } = review;
+    
+    // Format reviewer with Slack mention if available
+    const reviewerDisplay = reviewerSlackId ? `<@${reviewerSlackId}>` : reviewer;
+    
+    // Format the body into blocks with proper code formatting
+    const contentBlocks = body ? formatCodeSnippets(body) : [];
+    
+    // Common blocks shared across all review types
+    const blocks = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `${getStateIcon(state)} PR Review: ${getStateLabel(state)}`,
+          emoji: true
+        }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<${url}|${title}>*`
+        }
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:bust_in_silhouette: *Reviewer:* ${reviewerDisplay}`
+          }
+        ]
+      }
+    ];
+    
+    // Add comment count if comments were made
+    if (commentCount > 0) {
+      blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:speech_balloon: *Comments:* ${commentCount}`
+          }
+        ]
+      });
+    }
+    
+    // Add divider
+    blocks.push({
+      type: "divider"
+    });
+    
+    // Add formatted content blocks if body exists
+    if (contentBlocks.length > 0) {
+      blocks.push(...contentBlocks);
+    }
+    
+    // Add action buttons
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: ":link: View Review",
+            emoji: true
+          },
+          url: url,
+          style: state === 'approved' ? "primary" : undefined
+        }
+      ]
+    });
+    
+    // Generate appropriate fallback text
+    const text = getReviewText(state, reviewer, prNumber, title, commentCount);
+    
+    const result = await client.chat.postMessage({
+      channel: channelId,
+      text: text,
+      blocks: blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    
+    return result;
   } catch (error) {
     console.error('Error sending review message to Slack:', error);
     throw error;
+  }
+};
+
+/**
+ * Get the icon for a review state
+ * @param {string} state - Review state
+ * @returns {string} Emoji icon
+ */
+const getStateIcon = (state) => {
+  switch (state) {
+    case 'approved':
+      return ':white_check_mark:';
+    case 'changes_requested':
+      return ':x:';
+    case 'commented':
+      return ':speech_balloon:';
+    default:
+      return ':information_source:';
+  }
+};
+
+/**
+ * Get a user-friendly label for review state
+ * @param {string} state - Review state
+ * @returns {string} User-friendly state label
+ */
+const getStateLabel = (state) => {
+  switch (state) {
+    case 'approved':
+      return 'APPROVED';
+    case 'changes_requested':
+      return 'CHANGES REQUESTED';
+    case 'commented':
+      return 'COMMENTED';
+    default:
+      return state.toUpperCase().replace('_', ' ');
+  }
+};
+
+/**
+ * Get appropriate review text based on state
+ * @param {string} state - Review state
+ * @param {string} reviewer - Reviewer name
+ * @param {string} prNumber - PR number
+ * @param {string} title - PR title
+ * @param {number} commentCount - Number of comments
+ * @returns {string} Appropriate review text
+ */
+const getReviewText = (state, reviewer, prNumber, title, commentCount) => {
+  const commentText = commentCount > 0 ? ` with ${commentCount} comment${commentCount > 1 ? 's' : ''}` : '';
+  
+  switch (state) {
+    case 'approved':
+      return `${reviewer} approved PR #${prNumber}: ${title}${commentText}`;
+    case 'changes_requested':
+      return `${reviewer} requested changes on PR #${prNumber}: ${title}${commentText}`;
+    case 'commented':
+      return `${reviewer} commented on PR #${prNumber}: ${title}${commentText}`;
+    default:
+      return `${reviewer} reviewed PR #${prNumber}: ${title}${commentText}`;
   }
 };
 
@@ -368,19 +968,9 @@ const sendReviewMessage = async (token, channelId, data) => {
 const sendReviewStateMessage = async (token, channelId, data) => {
   const client = new WebClient(token);
   
-  let emoji, actionText;
-  switch (data.state) {
-    case 'approved':
-      emoji = ':white_check_mark:';
-      actionText = 'approved';
-      break;
-    case 'changes_requested':
-      emoji = ':x:';
-      actionText = 'requested changes on';
-      break;
-    default:
-      // Don't send message for just state change with no comment
-      return null;
+  // Only send messages for approved or changes_requested states
+  if (data.state !== 'approved' && data.state !== 'changes_requested') {
+    return null;
   }
   
   try {
@@ -388,10 +978,403 @@ const sendReviewStateMessage = async (token, channelId, data) => {
       channel: channelId,
       blocks: [
         {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `${getStateIcon(data.state)} PR Review: ${getStateLabel(data.state)}`,
+            emoji: true
+          }
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${emoji} *${data.reviewer}* ${actionText} pull request`
+            text: `*<${data.url}|${data.title}>*`
+          }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Reviewer:* ${data.reviewer}`
+            }
+          ]
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":link: View Review",
+                emoji: true
+              },
+              url: data.url,
+              style: data.state === 'approved' ? "primary" : undefined
+            }
+          ]
+        }
+      ],
+      text: `${data.reviewer} ${data.state === 'approved' ? 'approved' : 'requested changes on'} pull request: ${data.title}`
+    });
+  } catch (error) {
+    console.error('Error sending review state message to Slack:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a review comment message to Slack
+ * @param {string} token - Slack bot token
+ * @param {string} channelId - Slack channel ID
+ * @param {string} threadTs - Thread timestamp (null for top-level)
+ * @param {object} comment - Comment data
+ * @returns {Promise<object>} Slack message response
+ */
+const sendReviewCommentMessage = async (token, channelId, threadTs, comment) => {
+  try {
+    const client = new WebClient(token);
+    const { author, authorSlackId, body, url, path, line } = comment;
+    
+    // Format author with Slack mention if available
+    const authorDisplay = authorSlackId ? `<@${authorSlackId}>` : author;
+    
+    // Format the body to properly handle code snippets
+    const contentBlocks = formatCodeSnippets(body);
+    
+    // Create blocks array for the message
+    const blocks = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `:speech_balloon: Code Comment`,
+          emoji: true
+        }
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:bust_in_silhouette: *Author:* ${authorDisplay}`
+          }
+        ]
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:page_facing_up: *Location:* \`${path}:${line}\``
+          }
+        ]
+      },
+      {
+        type: "divider"
+      }
+    ];
+
+
+    blocks.push(...contentBlocks);
+
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: ":link: View Comment",
+            emoji: true
+          },
+          url: url
+        }
+      ]
+    });
+    
+    const result = await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs, // If null, creates a new thread
+      text: `Comment from ${author} on ${path}:${line}`,
+      blocks: blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    
+    return result;
+  } catch (error) {
+    console.error('Error sending review comment message to Slack:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a PR comment message to Slack with rich text code formatting
+ * @param {string} token - Slack bot token
+ * @param {string} channelId - Slack channel ID
+ * @param {Object} data - Comment data
+ * @returns {Promise<Object>} Slack message response
+ */
+const sendPrCommentMessage = async (token, channelId, data) => {
+  const client = new WebClient(token);
+  
+  // Format the body into blocks with proper code formatting
+  const contentBlocks = formatCodeSnippets(data.body);
+  
+  try {
+    // Create base blocks array for the message
+    const blocks = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `:speech_balloon: PR Comment`,
+          emoji: true
+        }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<${data.url}|${data.title || 'View PR'}>*`
+        }
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:bust_in_silhouette: *Author:* ${data.author}`
+          }
+        ]
+      },
+      {
+        type: "divider"
+      }
+    ];
+    
+    // Add the formatted content blocks
+    blocks.push(...contentBlocks);
+    
+    // Add action button
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: ":link: View Comment",
+            emoji: true
+          },
+          url: data.url
+        }
+      ]
+    });
+    
+    return await client.chat.postMessage({
+      channel: channelId,
+      blocks: blocks,
+      text: `${data.author} commented: ${truncateText(data.body, 50)}`
+    });
+  } catch (error) {
+    console.error('Error sending PR comment message to Slack:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a comment reply message to Slack with rich text code formatting
+ * @param {string} token - Slack bot token
+ * @param {string} channelId - Slack channel ID
+ * @param {string} threadTs - Thread timestamp
+ * @param {object} comment - Comment data
+ * @returns {Promise<object>} Slack message response
+ */
+const sendCommentReplyMessage = async (token, channelId, threadTs, comment) => {
+  try {
+    const client = new WebClient(token);
+    const { author, authorSlackId, body, url } = comment;
+    
+    // Format author with Slack mention if available
+    const authorDisplay = authorSlackId ? `<@${authorSlackId}>` : author;
+    
+    // Format the body into blocks with proper code formatting
+    const contentBlocks = formatCodeSnippets(body);
+    
+    // Create base blocks array for the message
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:bust_in_silhouette: *${authorDisplay}* replied:`
+          }
+        ]
+      }
+    ];
+    
+    // Add the formatted content blocks
+    blocks.push(...contentBlocks);
+    
+    // Add action button
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: ":link: View on GitHub",
+            emoji: true
+          },
+          url: url
+        }
+      ]
+    });
+    
+    const result = await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      blocks: blocks,
+      text: `Reply from ${author}: ${truncateText(body, 50)}`,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    
+    return result;
+  } catch (error) {
+    console.error('Error sending comment reply message to Slack:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a PR comment edited message to Slack with rich text code formatting
+ * @param {string} token - Slack bot token
+ * @param {string} channelId - Slack channel ID
+ * @param {string} threadTs - Thread timestamp to reply to
+ * @param {Object} data - Comment data
+ * @returns {Promise<Object>} Slack message response
+ */
+const sendCommentEditedMessage = async (token, channelId, threadTs, data) => {
+  const client = new WebClient(token);
+  
+  // Format the body into blocks with proper code formatting
+  const contentBlocks = formatCodeSnippets(data.body);
+  
+  try {
+    // Create base blocks array for the message
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `:pencil2: *${data.author}* edited their comment:`
+          }
+        ]
+      }
+    ];
+    
+    // Add the formatted content blocks
+    blocks.push(...contentBlocks);
+    
+    // Add action button
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: ":link: View Comment",
+            emoji: true
+          },
+          url: data.url
+        }
+      ]
+    });
+    
+    return await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      blocks: blocks,
+      text: `${data.author} edited comment: ${truncateText(data.body, 50)}`
+    });
+  } catch (error) {
+    console.error('Error sending comment edited message to Slack:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a PR reminder message to Slack
+ * @param {string} token - Slack bot token
+ * @param {string} channelId - Slack channel ID
+ * @param {Object} data - Reminder data
+ * @returns {Promise<Object>} Slack message response
+ */
+const sendPrReminderMessage = async (token, channelId, data) => {
+  const client = new WebClient(token);
+  
+  // Format reviewers mentions
+  const reviewerMentions = data.reviewers
+    .map(reviewer => reviewer.slackUserId ? `<@${reviewer.slackUserId}>` : reviewer.githubUsername)
+    .join(', ');
+  
+  try {
+    return await client.chat.postMessage({
+      channel: channelId,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `:alarm_clock: PR Review Reminder`,
+            emoji: true
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*<${data.url}|${data.title}>*`
+          }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:hourglass: *Open for:* ${data.hoursOpen} hours`
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:eyes: *Awaiting review from:* ${reviewerMentions}`
+            }
+          ]
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `:loudspeaker: This PR has been waiting for review for some time. Your feedback would be appreciated!`
           }
         },
         {
@@ -401,254 +1384,24 @@ const sendReviewStateMessage = async (token, channelId, data) => {
               type: "button",
               text: {
                 type: "plain_text",
-                text: "View on GitHub",
+                text: ":link: View PR",
                 emoji: true
               },
               url: data.url,
-              action_id: "view_review"
+              style: "primary"
             }
           ]
         }
       ],
-      text: `${data.reviewer} ${actionText} pull request: ${data.title}`
+      text: `Reminder: PR awaiting review from ${data.reviewers.map(r => r.githubUsername).join(', ')} for ${data.hoursOpen} hours`
     });
   } catch (error) {
-    console.error('Error sending review state message to Slack:', error);
+    console.error('Error sending PR reminder message to Slack:', error);
     throw error;
   }
 };
 
 /**
- * Send a PR review comment message to Slack (comment on code)
- * @param {string} token - Slack bot token
- * @param {string} channelId - Slack channel ID
- * @param {Object} data - Comment data
- * @returns {Promise<Object>} Slack message response
- */
-const sendReviewCommentMessage = async (token, channelId, data) => {
-    const client = new WebClient(token);
-    
-    // Format code snippet if present
-    const codeBlock = data.diffHunk ? formatCodeBlock(data.diffHunk) : '';
-    const filePath = data.path ? `*File:* \`${data.path}\`\n` : '';
-    
-    try {
-      return await client.chat.postMessage({
-        channel: channelId,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `:mag: *${data.author}* commented on the code:`
-            }
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: filePath + codeBlock
-            }
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: data.body
-            }
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: {
-                  type: "plain_text",
-                  text: "View on GitHub",
-                  emoji: true
-                },
-                url: data.url,
-                action_id: "view_code_comment"
-              }
-            ]
-          }
-        ],
-        text: `${data.author} commented on code: ${truncateText(data.body, 50)}`
-      });
-    } catch (error) {
-      console.error('Error sending review comment message to Slack:', error);
-      throw error;
-    }
-  };
-
-/**
- * Send a PR comment message to Slack
- * @param {string} token - Slack bot token
- * @param {string} channelId - Slack channel ID
- * @param {Object} data - Comment data
- * @returns {Promise<Object>} Slack message response
- */
-const sendPrCommentMessage = async (token, channelId, data) => {
-    const client = new WebClient(token);
-    
-    try {
-      return await client.chat.postMessage({
-        channel: channelId,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `:speech_balloon: *${data.author}* commented on the pull request:`
-            }
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: data.body
-            }
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: {
-                  type: "plain_text",
-                  text: "View on GitHub",
-                  emoji: true
-                },
-                url: data.url,
-                action_id: "view_comment"
-              }
-            ]
-          }
-        ],
-        text: `${data.author} commented: ${truncateText(data.body, 50)}`
-      });
-    } catch (error) {
-      console.error('Error sending PR comment message to Slack:', error);
-      throw error;
-    }
-  };
-
-  /**
- * Send a PR comment reply message to Slack
- * @param {string} token - Slack bot token
- * @param {string} channelId - Slack channel ID
- * @param {string} threadTs - Thread timestamp to reply to
- * @param {Object} data - Comment data
- * @returns {Promise<Object>} Slack message response
- */
-const sendCommentReplyMessage = async (token, channelId, threadTs, data) => {
-    const client = new WebClient(token);
-    
-    try {
-      return await client.chat.postMessage({
-        channel: channelId,
-        thread_ts: threadTs,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `*${data.author}*: ${data.body}`
-            }
-          }
-        ],
-        text: `${data.author} replied: ${truncateText(data.body, 50)}`
-      });
-    } catch (error) {
-      console.error('Error sending comment reply message to Slack:', error);
-      throw error;
-    }
-  };
-
-
-  /**
- * Send a PR comment edited message to Slack
- * @param {string} token - Slack bot token
- * @param {string} channelId - Slack channel ID
- * @param {string} threadTs - Thread timestamp to reply to
- * @param {Object} data - Comment data
- * @returns {Promise<Object>} Slack message response
- */
-const sendCommentEditedMessage = async (token, channelId, threadTs, data) => {
-    const client = new WebClient(token);
-    
-    try {
-      return await client.chat.postMessage({
-        channel: channelId,
-        thread_ts: threadTs,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `:pencil: *${data.author}* edited their comment:\n${data.body}`
-            }
-          }
-        ],
-        text: `${data.author} edited comment: ${truncateText(data.body, 50)}`
-      });
-    } catch (error) {
-      console.error('Error sending comment edited message to Slack:', error);
-      throw error;
-    }
-  };
-
-  /**
- * Send a PR reminder message to Slack
- * @param {string} token - Slack bot token
- * @param {string} channelId - Slack channel ID
- * @param {Object} data - Reminder data
- * @returns {Promise<Object>} Slack message response
- */
-const sendPrReminderMessage = async (token, channelId, data) => {
-    const client = new WebClient(token);
-    
-    // Format reviewers mentions
-    const reviewerMentions = data.reviewers
-      .map(reviewer => reviewer.slackUserId ? `<@${reviewer.slackUserId}>` : reviewer.githubUsername)
-      .join(', ');
-    
-    try {
-      return await client.chat.postMessage({
-        channel: channelId,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `:alarm_clock: *Reminder:* This PR has been open for ${data.hoursOpen} hours and is awaiting review from ${reviewerMentions}`
-            }
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: {
-                  type: "plain_text",
-                  text: "View PR",
-                  emoji: true
-                },
-                url: data.url,
-                action_id: "view_pr"
-              }
-            ]
-          }
-        ],
-        text: `Reminder: PR awaiting review from ${data.reviewers.map(r => r.githubUsername).join(', ')}`
-      });
-    } catch (error) {
-      console.error('Error sending PR reminder message to Slack:', error);
-      throw error;
-    }
-  };
-
-  /**
  * Send a PR merged to main message to Slack
  * @param {string} token - Slack bot token
  * @param {string} channelId - Main team channel ID 
@@ -656,57 +1409,85 @@ const sendPrReminderMessage = async (token, channelId, data) => {
  * @returns {Promise<Object>} Slack message response
  */
 const sendPrMergedToMainChannelMessage = async (token, channelId, data) => {
-    const client = new WebClient(token);
-    
-    try {
-      return await client.chat.postMessage({
-        channel: channelId,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `:tada: *${data.author}* merged PR: *${data.title}*\n*Repository:* ${data.repoName}`
-            }
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: {
-                  type: "plain_text",
-                  text: "View PR",
-                  emoji: true
-                },
-                url: data.url,
-                action_id: "view_pr"
-              }
-            ]
-          }
-        ],
-        text: `${data.author} merged PR: ${data.title}`
-      });
-    } catch (error) {
-      console.error('Error sending PR merged to main channel message to Slack:', error);
-      throw error;
-    }
-  };
+  const client = new WebClient(token);
   
-  module.exports = {
-    sendPrOpenedMessage,
-    sendPrClosedMessage,
-    sendPrReopenedMessage,
-    sendPrUpdatedMessage,
-    sendPrEditedMessage,
-    sendReviewRequestedMessage,
-    sendReviewRequestRemovedMessage,
-    sendReviewMessage,
-    sendReviewStateMessage,
-    sendPrCommentMessage,
-    sendReviewCommentMessage,
-    sendCommentReplyMessage,
-    sendCommentEditedMessage,
-    sendPrReminderMessage,
-    sendPrMergedToMainChannelMessage
-  };
+  try {
+    return await client.chat.postMessage({
+      channel: channelId,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `:tada: PR Merged to Main Branch`,
+            emoji: true
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*<${data.url}|${data.title}>*`
+          }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:bust_in_silhouette: *Author:* ${data.author}`
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `:file_folder: *Repository:* ${data.repoName}`
+            }
+          ]
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: ":link: View PR",
+                emoji: true
+              },
+              url: data.url
+            }
+          ]
+        }
+      ],
+      text: `${data.author} merged PR: ${data.title} in ${data.repoName}`
+    });
+  } catch (error) {
+    console.error('Error sending PR merged to main channel message to Slack:', error);
+    throw error;
+  }
+};
+
+module.exports = {
+  sendPrOpenedMessage,
+  sendPrClosedMessage,
+  sendPrReopenedMessage,
+  sendPrUpdatedMessage,
+  sendPrEditedMessage,
+  sendReviewRequestedMessage,
+  sendReviewRequestRemovedMessage,
+  sendReviewMessage,
+  sendReviewStateMessage,
+  sendPrCommentMessage,
+  sendReviewCommentMessage,
+  sendCommentReplyMessage,
+  sendCommentEditedMessage,
+  sendPrReminderMessage,
+  sendPrMergedToMainChannelMessage
+};
