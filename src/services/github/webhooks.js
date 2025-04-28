@@ -31,6 +31,7 @@ const handlePullRequestEvent = async (payload) => {
   try {
     const { action, repository, organization, pull_request: pr, installation } = payload;
     
+    console.log('action in handle pull request event: ', action)
     // Get organization from database
     let org = await db.organizations.findByGithubOrgId(organization?.id || repository.owner.id);
     
@@ -336,6 +337,7 @@ const handlePrReopened = async (org, repo, pr, payload) => {
  * @returns {Object} Result of processing
  */
 const handlePrReviewRequested = async (org, repo, pr, payload) => {
+  console.log('handle pr review requested is called during pr opening')
   try {
     // Get requested reviewer
     const requestedReviewer = payload.requested_reviewer?.login;
@@ -947,6 +949,7 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
                 null, // Create a new thread
                 {
                   author: originalComment.user.login,
+                  authorSlackId: slackUserId,
                   body: originalComment.body,
                   url: originalComment.html_url,
                   path: originalComment.path,
@@ -1183,105 +1186,6 @@ const handlePullRequestReviewCommentEvent = async (payload) => {
     throw error;
   }
 };
-
-// Helper function to get a valid GitHub token
-// Simple in-memory cache for tokens
-const tokenCache = new Map();
-
-const getAccessToken = async (org, repoFullName) => {
-  console.log(`[TOKEN] Getting GitHub access token for org: ${org.id}, repo: ${repoFullName}`);
-  
-  // Check cache first
-  const cacheKey = `org_${org.id}`;
-  const cachedToken = tokenCache.get(cacheKey);
-  if (cachedToken && cachedToken.expiresAt > new Date()) {
-    console.log(`[TOKEN] Using cached token valid until ${cachedToken.expiresAt}`);
-    return cachedToken.token;
-  }
-  
-  // Try to find an admin with a valid GitHub token
-  const { data: adminUsers } = await supabase
-    .from('users')
-    .select('*')
-    .eq('org_id', org.id)
-    .eq('is_admin', true)
-    .order('updated_at', { ascending: false });
-  
-  console.log(`[TOKEN] Found ${adminUsers?.length || 0} admin users`);
-  
-  for (const admin of adminUsers || []) {
-    if (admin.github_access_token) {
-      // Check if token is expired
-      const now = new Date();
-      const expiresAt = new Date(admin.github_token_expires_at);
-      
-      console.log(`[TOKEN] Admin ${admin.id} token expires: ${admin.github_token_expires_at}`);
-      
-      if (expiresAt > now) {
-        console.log(`[TOKEN] Using valid admin token from ${admin.id}`);
-        
-        // Cache the token
-        tokenCache.set(cacheKey, {
-          token: admin.github_access_token,
-          expiresAt: expiresAt
-        });
-        
-        return admin.github_access_token;
-      } else {
-        console.log(`[TOKEN] Admin ${admin.id} token is expired, attempting refresh`);
-        
-        // Try to refresh the token if we have a refresh token
-        if (admin.github_refresh_token) {
-          try {
-            const refreshedTokens = await githubService.refreshToken(admin.github_refresh_token);
-            
-            if (refreshedTokens && refreshedTokens.access_token) {
-              console.log(`[TOKEN] Successfully refreshed token for admin ${admin.id}`);
-              
-              // Update user tokens in database
-              await supabase
-                .from('users')
-                .update({
-                  github_access_token: refreshedTokens.access_token,
-                  github_token_expires_at: refreshedTokens.expires_at,
-                  github_refresh_token: refreshedTokens.refresh_token || admin.github_refresh_token,
-                  github_refresh_token_expires_at: refreshedTokens.refresh_token_expires_at || admin.github_refresh_token_expires_at
-                })
-                .eq('id', admin.id);
-              
-              // Cache the refreshed token
-              tokenCache.set(cacheKey, {
-                token: refreshedTokens.access_token,
-                expiresAt: new Date(refreshedTokens.expires_at)
-              });
-              
-              return refreshedTokens.access_token;
-            }
-          } catch (refreshError) {
-            console.error(`[TOKEN] Error refreshing token for admin ${admin.id}:`, refreshError);
-          }
-        }
-      }
-    }
-  }
-  
-  // If no valid admin token, use app installation token
-  console.log(`[TOKEN] No valid admin tokens, using app installation token: ${org.github_app_token ? 'available' : 'not available'}`);
-  
-  if (org.github_app_token) {
-    // Cache the app token too, with a shorter expiry
-    const appTokenExpiry = new Date();
-    appTokenExpiry.setHours(appTokenExpiry.getHours() + 1); // 1 hour cache
-    
-    tokenCache.set(cacheKey, {
-      token: org.github_app_token,
-      expiresAt: appTokenExpiry
-    });
-  }
-  
-  return org.github_app_token;
-};
-
 
 // This simple caching approach:
 
@@ -1533,14 +1437,14 @@ const processReviewRequest = async (org, pullRequest, reviewerUsername) => {
       }
       
       // Send notification
-      await slackService.sendReviewRequestedMessage(
-        org.slack_bot_token,
-        pullRequest.slack_channel_id,
-        {
-          reviewer: reviewerUsername,
-          slackUserId: reviewer.slack_user_id
-        }
-      );
+      // await slackService.sendReviewRequestedMessage(
+      //   org.slack_bot_token,
+      //   pullRequest.slack_channel_id,
+      //   {
+      //     reviewer: reviewerUsername,
+      //     slackUserId: reviewer.slack_user_id
+      //   }
+      // );
     }
   } catch (error) {
     console.error('Error processing review request:', error);

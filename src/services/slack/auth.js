@@ -1,4 +1,3 @@
-// src/services/slack.js
 const axios = require('axios');
 const { supabase } = require('../supabase/client');
 const config = require('../../config');
@@ -74,6 +73,9 @@ const slackAuth = {
       
       const data = response.data;
       
+      // Log the complete response for debugging
+      console.log('Slack OAuth response:', JSON.stringify(data, null, 2));
+      
       if (!data.ok) {
         throw new Error(`Slack OAuth error: ${data.error}`);
       }
@@ -88,6 +90,8 @@ const slackAuth = {
         })
         .eq('id', orgId);
       
+      // We're not storing the admin user token here as per request
+      
       return { success: true };
     } catch (error) {
       console.error('Error exchanging code for token:', error);
@@ -96,7 +100,7 @@ const slackAuth = {
   },
 
   
-  // Get users from Slack workspace
+  // Get users from Slack workspace with retry mechanism
   async getUsers(orgId) {
     try {
       // Get Slack connection
@@ -113,15 +117,11 @@ const slackAuth = {
       // Initialize Slack client
       const client = new WebClient(org.slack_bot_token);
       
-      // Get users from Slack
-      const response = await client.users.list();
-      
-      if (!response.ok) {
-        throw new Error(`Slack API error: ${response.error}`);
-      }
+      // Get users from Slack with retry mechanism
+      const members = await this.fetchSlackUsers(client);
       
       // Filter out bots, deactivated users, etc.
-      const users = response.members
+      const users = members
         .filter(user => !user.is_bot && !user.deleted && !user.is_restricted && !user.is_ultra_restricted)
         .map(user => ({
           id: user.id,
@@ -137,9 +137,38 @@ const slackAuth = {
     }
   },
 
-
-    async sendErrorMessage(token, channelId, threadTs, message) {
+  // Helper function to handle rate limiting
+  async fetchSlackUsers(client, retries = 3) {
+    try {
+      const response = await client.users.list();
       
+      if (!response.ok) {
+        throw new Error(`Slack API error: ${response.error}`);
+      }
+      
+      return response.members;
+    } catch (error) {
+      if (error.code === 'slack_webapi_platform_error' && 
+          error.data && error.data.error === 'ratelimited' && 
+          retries > 0) {
+        
+        // Get retry delay from header or use default
+        const retryAfter = parseInt(error.data.retry_after || '60', 10);
+        
+        console.log(`Rate limited by Slack. Retrying in ${retryAfter} seconds...`);
+        
+        // Wait for the specified time
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        
+        // Retry with one less retry attempt
+        return this.fetchSlackUsers(client, retries - 1);
+      }
+      
+      throw error;
+    }
+  },
+
+  async sendErrorMessage(token, channelId, threadTs, message) {
     try {
       const client = new WebClient(token);
       
@@ -164,7 +193,6 @@ const slackAuth = {
       throw error;
     }
   }
-
 };
 
 module.exports = slackAuth;

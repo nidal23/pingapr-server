@@ -1,6 +1,7 @@
 // src/api/controllers/slack/events.js
 const db = require('../../../services/supabase/functions');
 const githubService = require('../../../services/github/api');
+const githubAuthService = require('../../../services/github/auth')
 const slackService = require('../../../services/slack/auth');
 const { v4: uuidv4 } = require('uuid');
 
@@ -118,7 +119,7 @@ const processThreadReply = async (event) => {
           console.log(`Token for user ${user.id} is expired or about to expire, refreshing...`);
           try {
             // Refresh token
-            const refreshedTokens = await githubService.refreshToken(user.github_refresh_token);
+            const refreshedTokens = await githubAuthService.refreshGitHubToken(user.github_refresh_token);
             
             // Update user tokens in database
             await db.users.update(user.id, {
@@ -278,7 +279,7 @@ const processThreadReply = async (event) => {
         console.log(`Token for user ${user.id} is expired or about to expire, refreshing...`);
         try {
           // Refresh token
-          const refreshedTokens = await githubService.refreshToken(user.github_refresh_token);
+          const refreshedTokens = await githubAuthService.refreshGitHubToken(user.github_refresh_token);
           
           // Update user tokens in database
           await db.users.update(user.id, {

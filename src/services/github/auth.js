@@ -1,6 +1,7 @@
 // src/services/github/auth.js
 const axios = require('axios');
 const { supabase } = require('../supabase/client');
+const db = require('../supabase/functions');
 const config = require('../../config');
 
 const githubAuth = {
@@ -242,6 +243,60 @@ async  getAccessToken(orgId) {
     return null;
   }
 },
+
+async refreshGitHubToken(refreshTokenStr) {
+  try {
+    // Set up the request to GitHub's token endpoint
+    const clientId = process.env.GITHUB_CLIENT_ID;
+    const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+    
+    // Call GitHub's token endpoint to get a new access token
+    const response = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'refresh_token',
+        refresh_token: refreshTokenStr
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to refresh token: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.error) {
+      throw new Error(`GitHub token refresh error: ${data.error}`);
+    }
+    
+    // Calculate expiry times
+    const now = new Date();
+    const expiresIn = data.expires_in || 8 * 60 * 60; // Default to 8 hours if not provided
+    const expiresAt = new Date(now.getTime() + expiresIn * 1000);
+    
+    // Parse refresh token expiry
+    let refreshTokenExpiresAt = null;
+    if (data.refresh_token_expires_in) {
+      refreshTokenExpiresAt = new Date(now.getTime() + data.refresh_token_expires_in * 1000);
+    }
+    
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: expiresAt.toISOString(),
+      refresh_token_expires_at: refreshTokenExpiresAt ? refreshTokenExpiresAt.toISOString() : null
+    };
+  } catch (error) {
+    console.error('Error refreshing GitHub token:', error);
+    throw error;
+  }
+},
   
   // Fetch and save repositories
   async fetchAndSaveRepositories(accessToken, orgId) {
@@ -419,6 +474,104 @@ async getRepositories(orgId) {
     } catch (error) {
       console.error('Error toggling repository:', error);
       throw error;
+    }
+  },
+
+  /**
+   * Check if a user's GitHub token is valid and refresh if expired
+   * @param {Object} user - User object with token information
+   * @returns {Promise<Object>} Object with { valid: boolean, token: string|null, message: string|null }
+   */
+  async validateAndRefreshUserToken(user) {
+    try {
+      // Extract token info from user
+      const { 
+        github_access_token: accessToken, 
+        github_refresh_token: userRefreshToken,
+        github_token_expires_at: expiresAt,
+        id: userId
+      } = user;
+      
+      // If no access token, cannot proceed
+      if (!accessToken) {
+        return { 
+          valid: false, 
+          token: null,
+          message: "GitHub access token not found. Please reconnect your GitHub account."
+        };
+      }
+      
+      // Check if token is still valid
+      const now = new Date();
+      const tokenExpires = expiresAt ? new Date(expiresAt) : null;
+      
+      // Token is still valid
+      if (!tokenExpires || tokenExpires > now) {
+        // Verify token is actually working with GitHub API
+        try {
+          const { Octokit } = await import('@octokit/rest');
+          const octokit = new Octokit({ auth: accessToken });
+          await octokit.users.getAuthenticated();
+          
+          return { 
+            valid: true, 
+            token: accessToken,
+            message: null
+          };
+        } catch (apiError) {
+          console.error('Token API validation error:', apiError);
+          // Token doesn't work with API, try refreshing if possible
+        }
+      }
+      // Token is expired or not working, attempt refresh if possible
+      if (userRefreshToken) {
+        try {
+          console.log(`Attempting to refresh GitHub token for user: ${userId}`);
+          
+          
+          // Use the refresh token to get a new access token
+          const tokenData = await this.refreshGitHubToken(userRefreshToken);
+          
+          if (tokenData && tokenData.access_token) {
+            // Update the user's token information in the database using the proper db method
+            await db.users.update(userId, {
+              github_access_token: tokenData.access_token,
+              github_refresh_token: tokenData.refresh_towken || userRefreshToken,
+              github_token_expires_at: tokenData.expires_at,
+              github_refresh_token_expires_at: tokenData.refresh_token_expires_at,
+              updated_at: new Date().toISOString()
+            });
+            
+            console.log(`Successfully refreshed GitHub token for user: ${userId}`);
+            return { 
+              valid: true, 
+              token: tokenData.access_token,
+              message: null
+            };
+          }
+        } catch (refreshError) {
+          console.error('Token refresh error:', refreshError);
+          return { 
+            valid: false, 
+            token: null,
+            message: "Your GitHub authentication has expired and couldn't be refreshed. Please reconnect your GitHub account."
+          };
+        }
+      }
+      
+      // No refresh token or refresh failed
+      return { 
+        valid: false, 
+        token: null,
+        message: "Your GitHub authentication has expired. Please reconnect your GitHub account."
+      };
+    } catch (error) {
+      console.error('Error in validateAndRefreshUserToken:', error);
+      return { 
+        valid: false, 
+        token: null,
+        message: "An error occurred validating your GitHub credentials. Please try again later."
+      };
     }
   }
 };

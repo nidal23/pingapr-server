@@ -13,9 +13,10 @@ const githubUserAuthController = require('../controllers/github/userAuth');
 router.get('/callback', githubAuthController.handleInstallationCallback);
 router.get('/user-auth', githubUserAuthController.getUserAuthUrl);
 router.get('/user-auth/callback', githubUserAuthController.handleUserCallback);
+router.get('/auth-url', verifyJWT, githubAuthController.getAuthUrl);
+
 
 // Protected routes
-router.get('/auth-url', verifyJWT, githubAuthController.getAuthUrl);
 router.get('/repositories', verifyJWT, githubAuthController.getRepositories);
 router.post('/repositories/toggle', verifyJWT, githubAuthController.toggleRepository);
 router.get('/installation-url', verifyJWT, githubAuthController.getInstallationUrl);

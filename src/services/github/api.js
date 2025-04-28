@@ -466,6 +466,36 @@ const getReview = async (token, repoFullName, prNumber, reviewId) => {
   }
 };
 
+
+/**
+ * Create a review on a pull request
+ * @param {string} token - GitHub access token
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {number} pullNumber - Pull request number
+ * @param {string} event - Review event type ('APPROVE', 'REQUEST_CHANGES', or 'COMMENT')
+ * @param {string} body - Review comment body
+ * @returns {Promise<Object>} GitHub API response
+ */
+const createPullRequestReview = async (token, owner, repo, pullNumber, event, body) => {
+  try {
+    const octokit = await createOctokit(token);
+    
+    const response = await octokit.pulls.createReview({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      event,
+      body
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error creating pull request review:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   createComment,
   createCommentReply,
@@ -479,7 +509,8 @@ module.exports = {
   refreshToken,
   getReviewComments,
   getReview,
-  getReviewComment
+  getReviewComment,
+  createPullRequestReview
 };
 
 
