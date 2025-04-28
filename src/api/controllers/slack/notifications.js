@@ -1,19 +1,17 @@
-// src/api/controllers/slack/notifications.js - New file
-
-const slackNotifications = require('../../../services/slack/notifications');
+const notificationsService = require('../../../services/slack/notifications');
+const { ApiError } = require('../../../middleware/error');
 
 /**
- * Send invitations to all team members
+ * Send invitations to team members
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @param {Function} next - Express next middleware function
  */
-
-async function sendTeamInvitations(req, res) {
+const sendTeamInvitations = async (req, res, next) => {
   try {
-    const orgId = req.user.org_id;
+    const orgId = req.organization.id;
     
-    const result = await slackNotifications.sendTeamInvitations(orgId);
+    const result = await notificationsService.sendTeamInvitations(orgId);
     
     res.json({
       success: true,
@@ -21,9 +19,9 @@ async function sendTeamInvitations(req, res) {
     });
   } catch (error) {
     console.error('Error sending team invitations:', error);
-    res.status(500).json({ error: error.message });
+    next(error);
   }
-}
+};
 
 module.exports = {
   sendTeamInvitations

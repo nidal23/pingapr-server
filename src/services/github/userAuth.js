@@ -1,15 +1,16 @@
-// src/services/github/userAuth.js
 const axios = require('axios');
 const { supabase } = require('../supabase/client');
 const config = require('../../config');
+const { WebClient } = require('@slack/web-api');
 
 const githubUserAuth = {
   /**
    * Generate GitHub OAuth URL for a specific user using GitHub App user authorization
    * @param {string} userId - User ID
+   * @param {string} redirectTo - Redirect target after auth
    * @returns {Promise<string>} - Auth URL
    */
-  async getAuthUrl(userId) {
+  async getAuthUrl(userId, redirectTo = 'github') {
     try {
       // Get user details to find their organization
       const { data: user, error } = await supabase
@@ -22,10 +23,11 @@ const githubUserAuth = {
         throw error;
       }
       
-      // Create state parameter with user ID and org ID
+      // Create state parameter with user ID, org ID and redirect target
       const state = Buffer.from(JSON.stringify({
         userId,
-        orgId: user.org_id
+        orgId: user.org_id,
+        redirectTo
       })).toString('base64');
       
       // Use the web application flow to get user access token
@@ -54,7 +56,7 @@ const githubUserAuth = {
   async handleCallback(code, state) {
     try {
       // Decode state
-      const { userId, orgId } = JSON.parse(Buffer.from(state, 'base64').toString());
+      const { userId, orgId, redirectTo = 'github' } = JSON.parse(Buffer.from(state, 'base64').toString());
       
       // Exchange code for token using GitHub's OAuth endpoint
       const response = await axios.post('https://github.com/login/oauth/access_token', {
@@ -109,67 +111,12 @@ const githubUserAuth = {
       return { 
         success: true,
         userId,
-        githubUsername: githubUser.login
+        githubUsername: githubUser.login,
+        redirectTo
       };
     } catch (error) {
       console.error('Error handling GitHub user auth callback:', error);
       throw error;
-    }
-  },
-  
-  /**
-   * Refresh a user's GitHub access token
-   * @param {string} userId - User ID
-   * @returns {Promise<boolean>} - Success status
-   */
-  async refreshUserToken(userId) {
-    try {
-      // Get user details with refresh token
-      const { data: user, error } = await supabase
-        .from('users')
-        .select('github_refresh_token')
-        .eq('id', userId)
-        .single();
-      
-      if (error || !user.github_refresh_token) {
-        throw new Error('No refresh token available');
-      }
-      
-      // Exchange refresh token for new access token
-      const response = await axios.post('https://github.com/login/oauth/access_token', {
-        client_id: config.github.clientId,
-        client_secret: config.github.clientSecret,
-        grant_type: 'refresh_token',
-        refresh_token: user.github_refresh_token
-      }, {
-        headers: {
-          Accept: 'application/json'
-        }
-      });
-      
-      if (!response.data.access_token) {
-        throw new Error('Failed to refresh access token');
-      }
-      
-      // Update user with new tokens
-      await supabase
-        .from('users')
-        .update({
-          github_access_token: response.data.access_token,
-          github_token_expires_at: response.data.expires_in ? 
-            new Date(Date.now() + response.data.expires_in * 1000).toISOString() : 
-            null,
-          github_refresh_token: response.data.refresh_token || user.github_refresh_token,
-          github_refresh_token_expires_at: response.data.refresh_token_expires_in ?
-            new Date(Date.now() + response.data.refresh_token_expires_in * 1000).toISOString() :
-            null
-        })
-        .eq('id', userId);
-      
-      return true;
-    } catch (error) {
-      console.error('Error refreshing user token:', error);
-      return false;
     }
   },
   
@@ -181,10 +128,10 @@ const githubUserAuth = {
    */
   async sendSlackConfirmation(userId, githubUsername) {
     try {
-      // Get user details
+      // Get user details including slack_user_token
       const { data: user, error } = await supabase
         .from('users')
-        .select('slack_user_id, org_id')
+        .select('slack_user_id, org_id, slack_user_token')
         .eq('id', userId)
         .single();
       
@@ -204,29 +151,75 @@ const githubUserAuth = {
       }
       
       // Initialize Slack client
-      const { WebClient } = require('@slack/web-api');
       const client = new WebClient(org.slack_bot_token);
+      
+      // Build blocks array
+      const blocks = [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*GitHub Connection Successful!* 🎉\n\nYour GitHub account (${githubUsername}) has been connected to PingaPR.`
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "You can now:\n• Reply to GitHub comments directly from Slack\n• Approve PRs with `/lgtm`\n• Use `/pingapr` commands to manage your PRs\n• Receive personalized PR notifications"
+          }
+        }
+      ];
+      
+      // If Slack auth is not done yet, add a reminder
+      if (!user.slack_user_token) {
+        const slackAuthUrl = `${config.app.baseUrl}/api/slack/user-auth?user_id=${userId}`;
+        
+        blocks.push(
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*One more step:* To enable comments to appear as you in Slack, please connect your Slack account."
+            }
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "Connect Slack Account",
+                  emoji: true
+                },
+                url: slackAuthUrl,
+                style: "primary",
+                action_id: "slack_auth"
+              }
+            ]
+          }
+        );
+      } else {
+        // If both are connected, add a "setup complete" message
+        blocks.push(
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: "✅ Setup complete! You're all set to collaborate seamlessly across GitHub and Slack."
+              }
+            ]
+          }
+        );
+      }
       
       // Send confirmation message
       await client.chat.postMessage({
         channel: user.slack_user_id,
-        text: `Your GitHub account (${githubUsername}) has been successfully connected to PingaPR! 🎉`,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `*GitHub Connection Successful!* 🎉\n\nYour GitHub account (${githubUsername}) has been connected to PingaPR.`
-            }
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: "You can now:\n• Reply to GitHub comments directly from Slack\n• Approve PRs with `/lgtm`\n• Use `/pingapr` commands to manage your PRs\n• Receive personalized PR notifications"
-            }
-          }
-        ]
+        text: `Your GitHub account (${githubUsername}) has been successfully connected to PingaPR!`,
+        blocks: blocks
       });
       
       return true;

@@ -399,6 +399,40 @@ const users = {
         ...userData
       });
     }
+  },
+
+   /**
+   * Find user by ID with Slack token
+   * @param {string} userId - User UUID
+   * @returns {Promise<Object>} User data with slack token
+   */
+   async findWithSlackToken(slackUserId) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('slack_user_id, slack_user_token, org_id')
+      .eq('slack_user_id', slackUserId)
+      .single();
+    
+    if (error) throw error;
+    return data;
+  },
+  
+  /**
+   * Clear a user's Slack token (for revoked tokens)
+   * @param {string} userId - User UUID
+   * @returns {Promise<boolean>} Success status
+   */
+  async clearSlackToken(userId) {
+    const { error } = await supabase
+      .from('users')
+      .update({
+        slack_user_token: null,
+        slack_token_expires_at: null
+      })
+      .eq('id', userId);
+    
+    if (error) throw error;
+    return true;
   }
 };
 
@@ -545,6 +579,120 @@ const pullRequests = {
     
     if (error) throw error;
   },
+
+
+    /**
+   * Find all open pull requests for a repository
+   * @param {string} repoId - Repository UUID
+   * @returns {Promise<Array>} List of open pull requests with repository and author data
+   */
+  async findOpenPRsByRepoId(repoId) {
+    const { data, error } = await supabase
+      .from('pull_requests')
+      .select(`
+        id,
+        title,
+        github_pr_number,
+        slack_channel_id,
+        status,
+        repository:repo_id(id, github_repo_name),
+        author:author_id(id, github_username, slack_user_id)
+      `)
+      .eq('repo_id', repoId)
+      .eq('status', 'open');
+    
+    if (error) throw error;
+    return data;
+  },
+
+  
+  async findOpenPRsByAuthor(userId) {
+    const { data, error } = await supabase
+      .from('pull_requests')
+      .select(`
+        id,
+        title,
+        status,
+        github_pr_number,
+        slack_channel_id,
+        repository:repo_id(id, github_repo_name)
+      `)
+      .eq('author_id', userId)
+      .eq('status', 'open');
+    
+    if (error) throw error;
+    return data;
+  },
+
+  /**
+   * Find all open pull requests across multiple repositories
+   * @param {Array<string>} repoIds - Array of repository UUIDs
+   * @returns {Promise<Array>} List of open pull requests with repository and author data
+   */
+  async findOpenPRsByRepoIds(repoIds) {
+    if (!repoIds || repoIds.length === 0) return [];
+    
+    const { data, error } = await supabase
+      .from('pull_requests')
+      .select(`
+        id,
+        title,
+        github_pr_number,
+        slack_channel_id,
+        status,
+        repository:repo_id(id, github_repo_name),
+        author:author_id(id, github_username, slack_user_id)
+      `)
+      .in('repo_id', repoIds)
+      .eq('status', 'open');
+    
+    if (error) throw error;
+    return data;
+  },
+
+  /**
+ * Find all open pull requests authored by a user
+ * @param {string} userId - User UUID
+ * @returns {Promise<Array>} List of open pull requests authored by the user
+ */
+  async findOpenPRsByAuthor(userId) {
+    const { data, error } = await supabase
+      .from('pull_requests')
+      .select(`
+        id,
+        title,
+        status,
+        github_pr_number,
+        slack_channel_id,
+        repository:repo_id(id, github_repo_name)
+      `)
+      .eq('author_id', userId)
+      .eq('status', 'open');
+    
+    if (error) throw error;
+    return data;
+  },
+  
+
+  /**
+   * Find a pull request by Slack channel ID
+   * @param {string} channelId - Slack channel ID
+   * @returns {Promise<Object>} Pull request data with repository and author
+   */
+  async findBySlackChannelId(channelId) {
+    const { data, error } = await supabase
+      .from('pull_requests')
+      .select(`
+        *,
+        repository:repo_id(id, github_repo_name, org_id, github_repo_id),
+        author:author_id(id, github_username, slack_user_id)
+      `)
+      .eq('slack_channel_id', channelId)
+      .single();
+    
+    if (error && error.code !== 'PGRST116') throw error;
+    return data;
+  },
   
   /**
    * Check for channels that should be archived
@@ -634,7 +782,49 @@ const reviewRequests = {
         ...data
       });
     }
+  },
+
+  /**
+ * Find all open pull requests where a user is a reviewer but not the author
+ * @param {string} userId - User UUID
+ * @returns {Promise<Array>} List of review requests with pull request data
+ */
+async findOpenPRsForReviewer(userId) {
+  try {
+    // First, get all review requests where the user is a reviewer
+    const { data, error } = await supabase
+      .from('review_requests')
+      .select(`
+        id,
+        status,
+        pull_request:pr_id(
+          id,
+          title,
+          status,
+          github_pr_number,
+          slack_channel_id,
+          author_id,
+          repository:repo_id(id, github_repo_name),
+          author:author_id(id, github_username, slack_user_id)
+        )
+      `)
+      .eq('reviewer_id', userId)
+      .eq('pull_request.status', 'open');
+    
+    if (error) throw error;
+    
+    // Filter out PRs where the user is also the author
+    const filteredData = data.filter(item => 
+      item.pull_request && item.pull_request.author_id !== userId
+    );
+    
+    return filteredData;
+  } catch (error) {
+    console.error('Error in findOpenPRsForReviewer:', error);
+    throw error;
   }
+}
+
 };
 
 /**
