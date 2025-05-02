@@ -51,6 +51,7 @@ const healthRoutes = require('./api/routes/health');
 const githubRoutes = require('./api/routes/github');
 const slackRoutes = require('./api/routes/slack');
 const onboardingRoutes = require('./api/routes/onboarding')
+const dashboardRoutes = require('./api/routes/dashboard')
 
 // API routes
 // app.use('/api/health', require('./api/routes/health'));
@@ -66,6 +67,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/slack', slackRoutes);
 app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/dashboard', dashboardRoutes)
 
 
 
