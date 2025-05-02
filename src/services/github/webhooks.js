@@ -7,9 +7,10 @@ const db = require('../supabase/functions');
 const slackService = require('../../services/slack/messages');
 const slackChannels = require('../../services/slack/channels');
 const { formatPrDescription } = require('../../utils/formatting');
-const { supabase } = require('../supabase/client');
 const githubService = require('./api')
 const githubAuth = require('./auth');
+const { WebClient } = require('@slack/web-api');
+
 /**
  * Handle GitHub ping event
  * @param {Object} payload - GitHub webhook payload
@@ -405,7 +406,7 @@ const handlePrReviewRequestRemoved = async (org, repo, pr, payload) => {
     // Find the reviewer
     const reviewer = await db.users.findByGithubUsername(org.id, removedReviewer);
     
-    if (reviewer) {
+    if (reviewer && reviewer.slack_user_id && pullRequest.slack_channel_id) {
       // Find the review request
       const reviewRequest = await db.reviewRequests.findByPrAndReviewer(
         pullRequest.id,
@@ -418,18 +419,32 @@ const handlePrReviewRequestRemoved = async (org, repo, pr, payload) => {
           status: 'removed'
         });
         
-        // Notify in Slack if channel exists
-        if (pullRequest.slack_channel_id) {
-          await slackService.sendReviewRequestRemovedMessage(
-            org.slack_bot_token,
-            pullRequest.slack_channel_id,
-            {
-              title: pr.title,
-              url: pr.html_url,
-              reviewer: removedReviewer,
-              removedBy: payload.sender.login
-            }
-          );
+        // Initialize Slack client
+        const slackClient = new WebClient(org.slack_bot_token);
+        
+        // First, send a notification message about the removal
+        await slackService.sendReviewRequestRemovedMessage(
+          org.slack_bot_token,
+          pullRequest.slack_channel_id,
+          {
+            reviewer,
+            reviewerSlackId: reviewer.slack_user_id,
+            removedBy: payload.sender.login
+          }
+        );
+        
+        try {
+          // Then, remove the user from the channel
+          await slackClient.conversations.kick({
+            channel: pullRequest.slack_channel_id,
+            user: reviewer.slack_user_id
+          });
+          
+          console.log(`Removed user ${reviewer.slack_user_id} from channel ${pullRequest.slack_channel_id}`);
+        } catch (kickError) {
+          // Don't fail the whole operation if kick fails
+          // This could happen if user is already not in channel or bot lacks permissions
+          console.error('Error removing user from channel:', kickError);
         }
       }
     }
@@ -1437,14 +1452,14 @@ const processReviewRequest = async (org, pullRequest, reviewerUsername) => {
       }
       
       // Send notification
-      // await slackService.sendReviewRequestedMessage(
-      //   org.slack_bot_token,
-      //   pullRequest.slack_channel_id,
-      //   {
-      //     reviewer: reviewerUsername,
-      //     slackUserId: reviewer.slack_user_id
-      //   }
-      // );
+      await slackService.sendReviewRequestedMessage(
+        org.slack_bot_token,
+        pullRequest.slack_channel_id,
+        {
+          reviewer: reviewerUsername,
+          slackUserId: reviewer.slack_user_id
+        }
+      );
     }
   } catch (error) {
     console.error('Error processing review request:', error);

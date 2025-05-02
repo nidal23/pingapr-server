@@ -697,7 +697,7 @@ const sendReviewRequestedMessage = async (token, channelId, data) => {
           elements: [
             {
               type: "mrkdwn",
-              text: `${data.requestedBy} has requested a review from ${reviewerMention}`
+              text: `${reviewerMention} was added as a reviewer`
             }
           ]
         }
@@ -733,7 +733,7 @@ const sendReviewRequestRemovedMessage = async (token, channelId, data) => {
           elements: [
             {
               type: "mrkdwn",
-              text: `${data.removedBy} has removed the review request for ${reviewerMention}`
+              text: `removed the review request for ${reviewerMention}`
             }
           ]
         }
