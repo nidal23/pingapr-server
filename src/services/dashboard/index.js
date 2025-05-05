@@ -84,7 +84,7 @@ const dashboardService = {
         repo_id,
         author_id
       `)
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .order('updated_at', { ascending: false })
       .limit(10);
     
@@ -149,7 +149,7 @@ const dashboardService = {
     const { data: prs, error } = await supabase
       .from('pull_requests')
       .select('status')
-      .eq('repo_id', repoIds);
+      .in('repo_id', repoIds);
     
     if (error) throw error;
     
@@ -194,7 +194,7 @@ const dashboardService = {
       const { data: prs, error: prError } = await supabase
         .from('pull_requests')
         .select('id, created_at, merged_at')
-        .eq('repo_id', repoIds);
+        .in('repo_id', repoIds);
 
       if (prError) throw prError;
 
@@ -262,7 +262,7 @@ const dashboardService = {
     const { data: weeklyPRs, error } = await supabase
       .from('pull_requests')
       .select('id, status, created_at, merged_at, closed_at')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .gte('created_at', twelvWeeksAgo.toISOString());
     
     if (error) throw error;
@@ -415,7 +415,7 @@ const dashboardService = {
     const { data: createdPRs, error: createdError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .gte('created_at', startDate.toISOString());
     
     if (createdError) throw createdError;
@@ -424,7 +424,7 @@ const dashboardService = {
     const { data: mergedPRs, error: mergedError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .eq('status', 'merged')
       .gte('merged_at', startDate.toISOString());
     
@@ -434,7 +434,7 @@ const dashboardService = {
     const { data: closedPRs, error: closedError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .eq('status', 'closed')
       .gte('closed_at', startDate.toISOString());
     
@@ -444,7 +444,7 @@ const dashboardService = {
     const { data: prIds, error: prIdsError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds);
+      .in('repo_id', repoIds);
 
     if (prIdsError) throw prIdsError;
 
@@ -512,7 +512,7 @@ const dashboardService = {
         repo_id,
         author_id
       `)
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .eq('status', 'open')
       .or(`updated_at.gte.${startDate.toISOString()},created_at.gte.${startDate.toISOString()}`)
       .order('updated_at', { ascending: false });
@@ -674,7 +674,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
     const { data: prActivity, error: prActivityError } = await supabase
       .from('pull_requests')
       .select('status, created_at')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .gte('created_at', startDate.toISOString());
     
     if (prActivityError) throw prActivityError;
@@ -771,7 +771,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
     const { data: periodPRs, error } = await supabase
       .from('pull_requests')
       .select('id, status, created_at, merged_at, closed_at, updated_at')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .gte('updated_at', startDate.toISOString());
     
     if (error) throw error;
@@ -822,33 +822,38 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
     const { data: prIds, error: prIdsError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds);
-
+      .in('repo_id', repoIds);
+  
     if (prIdsError) throw prIdsError;
-
-    // Get comments grouped by source
-    const { data: commentCounts, error } = await supabase
+    
+    // Get comments
+    const { data: comments, error } = await supabase
       .from('comments')
       .select('source')
       .in('pr_id', prIds.map(pr => pr.id))
       .gte('created_at', startDate.toISOString());
     
+    console.log('comment counts: ', comments);
+    
     if (error) throw error;
     
-    const platformEngagement = [
-      { source: 'github', comment_count: 0 },
-      { source: 'slack', comment_count: 0 }
-    ];
+    // Count occurrences of each source
+    const sourceCount = {
+      'github': 0,
+      'slack': 0
+    };
     
-    commentCounts.forEach(item => {
-      const count = parseInt(item.count);
-      
-      if (item.source === 'github') {
-        platformEngagement[0].comment_count = count;
-      } else if (item.source === 'slack') {
-        platformEngagement[1].comment_count = count;
+    comments.forEach(item => {
+      if (item.source in sourceCount) {
+        sourceCount[item.source]++;
       }
     });
+    
+    // Format the output
+    const platformEngagement = [
+      { source: 'github', comment_count: sourceCount['github'] },
+      { source: 'slack', comment_count: sourceCount['slack'] }
+    ];
     
     return platformEngagement;
   },
@@ -864,7 +869,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
     const { data: prIds, error: prIdsError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds);
+      .in('repo_id', repoIds);
 
     if (prIdsError) throw prIdsError;
 
@@ -991,7 +996,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
     const { data: prs, error: prError } = await supabase
       .from('pull_requests')
       .select('id, author_id')
-      .eq('repo_id', repoIds)
+      .in('repo_id', repoIds)
       .gte('created_at', startDate.toISOString());
     
     if (prError) throw prError;
@@ -1047,7 +1052,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
       const { data: authoredPRs, error: prError } = await supabase
         .from('pull_requests')
         .select('id, status, created_at, merged_at')
-        .eq('repo_id', repoIds)
+        .in('repo_id', repoIds)
         .eq('author_id', member.id)
         .gte('created_at', startDate.toISOString());
       
@@ -1057,7 +1062,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
       const { data: prIds, error: prIdsError } = await supabase
         .from('pull_requests')
         .select('id')
-        .eq('repo_id', repoIds);
+        .in('repo_id', repoIds);
 
       if (prIdsError) throw prIdsError;
       
@@ -1116,7 +1121,7 @@ async getAnalyticsData(orgId, period = 'monthly', repoId = null) {
     const { data: prIds, error: prIdsError } = await supabase
       .from('pull_requests')
       .select('id')
-      .eq('repo_id', repoIds);
+      .in('repo_id', repoIds);
 
     if (prIdsError) throw prIdsError;
 
