@@ -236,7 +236,9 @@ const handlePrClosed = async (org, repo, pr, payload) => {
       merged_at: isMerged ? new Date(pr.merged_at).toISOString() : null,
       closed_at: new Date(pr.closed_at).toISOString()
     });
-    
+
+    const closedUser = await db.users.findByGithubUsername(org.id, payload.sender.login)
+    const closedUserSlackId = closedUser?.slack_user_id || null;
     // Send PR closed notification to Slack
     if (pullRequest.slack_channel_id) {
       await slackService.sendPrClosedMessage(
@@ -246,7 +248,7 @@ const handlePrClosed = async (org, repo, pr, payload) => {
           title: pr.title,
           url: pr.html_url,
           merged: isMerged,
-          closedBy: payload.sender.login,
+          closedBy: closedUserSlackId ?? payload.sender.login,
           repoName: repo.github_repo_name
         }
       );
