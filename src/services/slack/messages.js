@@ -408,7 +408,7 @@ const sendPrClosedMessage = async (token, channelId, pr) => {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `*<${pr.url}|${pr.title}>* has been ${status} by ${pr.closedBy}`
+            text: `*<${pr.url}|${pr.title}>* has been ${status} ${!pr.merged ? 'without merging' : ''} by <@${pr.closedBy}>`
           }
         },
         {
@@ -438,7 +438,7 @@ const sendPrClosedMessage = async (token, channelId, pr) => {
           ]
         }
       ],
-      text: `PR ${status}: ${pr.title} by ${pr.closedBy}`
+      text: `PR ${status}${!pr.merged ? ' without merging' : ''}: ${pr.title} by <@${pr.closedBy}>`
     });
   } catch (error) {
     console.error(`Error sending PR ${status} message to Slack:`, error);
