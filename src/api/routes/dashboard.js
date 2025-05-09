@@ -21,4 +21,14 @@ router.get('/analytics', dashboardController.getAnalyticsData);
 // Team Collaboration Dashboard
 router.get('/collaboration', dashboardController.getCollaborationData);
 
+
+// Teams routes
+router.get('/teams', dashboardController.getTeams);
+router.get('/teams/:id', dashboardController.getTeam);
+router.get('/teams/:id/members', dashboardController.getTeamMembers);
+router.get('/members', dashboardController.getMembers);
+router.post('/teams', dashboardController.createTeam);
+router.put('/teams/:id', dashboardController.updateTeam);
+router.delete('/teams/:id', dashboardController.deleteTeam);
+
 module.exports = router;
