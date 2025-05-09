@@ -1417,10 +1417,40 @@ const sendCommentEditedMessage = async (token, channelId, threadTs, data) => {
 const sendPrReminderMessage = async (token, channelId, data) => {
   const client = new WebClient(token);
   
-  // Format reviewers mentions
-  const reviewerMentions = data.reviewers
-    .map(reviewer => reviewer.slackUserId ? `<@${reviewer.slackUserId}>` : reviewer.githubUsername)
-    .join(', ');
+  // Format time open
+  let timeOpenText = `${data.hoursOpen} hours`;
+  if (data.daysOpen > 0) {
+    timeOpenText = `${data.daysOpen} days`;
+    if (data.hoursOpen % 24 > 0) {
+      timeOpenText += ` and ${data.hoursOpen % 24} hours`;
+    }
+  }
+  
+  // Format reviewer mentions
+  const formatReviewers = (reviewers) => {
+    return reviewers.map(r => r.slackUserId ? `<@${r.slackUserId}>` : r.githubUsername).join(', ');
+  };
+  
+  // Build appropriate message based on review status
+  let statusText = '';
+  let actionsText = '';
+  
+  if (data.changesRequestedReviewers.length > 0) {
+    statusText = `This PR has changes requested by: ${formatReviewers(data.changesRequestedReviewers)}`;
+    actionsText = 'Please address the requested changes.';
+  } else if (data.approvedReviewers.length > 0 && data.pendingReviewers.length === 0) {
+    statusText = `This PR has been approved by: ${formatReviewers(data.approvedReviewers)}`;
+    actionsText = 'This PR is ready to be merged!';
+  } else if (data.approvedReviewers.length > 0) {
+    statusText = `This PR has been approved by: ${formatReviewers(data.approvedReviewers)}`;
+    actionsText = `Still waiting for reviews from: ${formatReviewers(data.pendingReviewers)}`;
+  } else if (data.pendingReviewers.length > 0) {
+    statusText = 'This PR has no approvals yet.';
+    actionsText = `Waiting for reviews from: ${formatReviewers(data.pendingReviewers)}`;
+  } else {
+    statusText = 'This PR has no reviewers assigned.';
+    actionsText = 'Consider adding reviewers to move this PR forward.';
+  }
   
   try {
     return await client.chat.postMessage({
@@ -1430,7 +1460,7 @@ const sendPrReminderMessage = async (token, channelId, data) => {
           type: "header",
           text: {
             type: "plain_text",
-            text: `:alarm_clock: PR Review Reminder`,
+            text: `:alarm_clock: PR Reminder`,
             emoji: true
           }
         },
@@ -1446,28 +1476,26 @@ const sendPrReminderMessage = async (token, channelId, data) => {
           elements: [
             {
               type: "mrkdwn",
-              text: `:hourglass: *Open for:* ${data.hoursOpen} hours`
+              text: `:hourglass: *Open for:* ${timeOpenText}`
             }
           ]
-        },
-        {
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: `:eyes: *Awaiting review from:* ${reviewerMentions}`
-            }
-          ]
-        },
-        {
-          type: "divider"
         },
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:loudspeaker: This PR has been waiting for review for some time. Your feedback would be appreciated!`
+            text: statusText
           }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: actionsText
+          }
+        },
+        {
+          type: "divider"
         },
         {
           type: "actions",
@@ -1485,7 +1513,7 @@ const sendPrReminderMessage = async (token, channelId, data) => {
           ]
         }
       ],
-      text: `Reminder: PR awaiting review from ${data.reviewers.map(r => r.githubUsername).join(', ')} for ${data.hoursOpen} hours`
+      text: `Reminder: PR #${data.prNumber} has been open for ${timeOpenText}`
     });
   } catch (error) {
     console.error('Error sending PR reminder message to Slack:', error);

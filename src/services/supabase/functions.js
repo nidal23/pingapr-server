@@ -539,18 +539,26 @@ const pullRequests = {
   },
   
   /**
-   * Get all review requests for a pull request
-   * @param {string} prId - Pull request UUID
-   * @returns {Promise<Array>} List of review requests
-   */
-  async getReviewRequests(prId) {
-    const { data, error } = await supabase
-      .from('review_requests')
-      .select(`
-        *,
-        reviewer:reviewer_id(id, github_username, slack_user_id)
-      `)
-      .eq('pr_id', prId);
+ * Get review requests for a PR with optional team member filtering
+ * @param {string} prId - Pull request ID
+ * @param {string[]|null} teamMemberIds - Optional team member IDs to filter reviewers
+ * @returns {Promise<Array>} Review requests with reviewer details
+ */
+  async getReviewRequests(prId, teamMemberIds = null) {
+  let query = supabase
+    .from('review_requests')
+    .select(`
+      *,
+      reviewer:reviewer_id(id, github_username, slack_user_id)
+    `)
+    .eq('pr_id', prId);
+  
+    // Filter by team members as reviewers if provided
+    if (teamMemberIds && teamMemberIds.length > 0) {
+      query = query.in('reviewer_id', teamMemberIds);
+    }
+    
+    const { data, error } = await query;
     
     if (error) throw error;
     return data;
@@ -789,41 +797,56 @@ const reviewRequests = {
  * @param {string} userId - User UUID
  * @returns {Promise<Array>} List of review requests with pull request data
  */
-async findOpenPRsForReviewer(userId) {
-  try {
-    // First, get all review requests where the user is a reviewer
+  async findOpenPRsForReviewer(userId) {
+    try {
+      // First, get all review requests where the user is a reviewer
+      const { data, error } = await supabase
+        .from('review_requests')
+        .select(`
+          id,
+          status,
+          pull_request:pr_id(
+            id,
+            title,
+            status,
+            github_pr_number,
+            slack_channel_id,
+            author_id,
+            repository:repo_id(id, github_repo_name),
+            author:author_id(id, github_username, slack_user_id)
+          )
+        `)
+        .eq('reviewer_id', userId)
+        .eq('pull_request.status', 'open');
+      
+      if (error) throw error;
+      
+      // Filter out PRs where the user is also the author
+      const filteredData = data.filter(item => 
+        item.pull_request && item.pull_request.author_id !== userId
+      );
+      
+      return filteredData;
+    } catch (error) {
+      console.error('Error in findOpenPRsForReviewer:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get all review requests for a PR
+   * @param {string} prId - Pull request UUID
+   * @returns {Promise<Array>} List of review requests
+   */
+  async getByPrId(prId) {
     const { data, error } = await supabase
       .from('review_requests')
-      .select(`
-        id,
-        status,
-        pull_request:pr_id(
-          id,
-          title,
-          status,
-          github_pr_number,
-          slack_channel_id,
-          author_id,
-          repository:repo_id(id, github_repo_name),
-          author:author_id(id, github_username, slack_user_id)
-        )
-      `)
-      .eq('reviewer_id', userId)
-      .eq('pull_request.status', 'open');
+      .select('*')
+      .eq('pr_id', prId);
     
     if (error) throw error;
-    
-    // Filter out PRs where the user is also the author
-    const filteredData = data.filter(item => 
-      item.pull_request && item.pull_request.author_id !== userId
-    );
-    
-    return filteredData;
-  } catch (error) {
-    console.error('Error in findOpenPRsForReviewer:', error);
-    throw error;
+    return data;
   }
-}
 
 };
 

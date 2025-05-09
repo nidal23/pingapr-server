@@ -2,6 +2,7 @@
 const app = require('./app');
 const config = require('./config');
 const { supabase } = require('./services/supabase/client');
+const { setupCronJobs } = require('./services/cron');
 
 const PORT = config.app.port;
 
@@ -17,11 +18,14 @@ async function startServer() {
     } else {
       console.log('Database connection successful');
     }
-    
+
     // Start server
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Environment: ${config.app.env}`);
+      
+      // Set up cron jobs after server is started
+      setupCronJobs();
     });
   } catch (err) {
     console.error('Failed to start server:', err);

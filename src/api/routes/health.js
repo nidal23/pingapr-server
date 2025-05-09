@@ -5,6 +5,8 @@ const express = require('express');
 const router = express.Router();
 const { supabase } = require('../../services/supabase/client');
 const pkg = require('../../../package.json');
+const { addCronHealthEndpoint } = require('../../services/cron');
+const cronDebug = require('../../services/cron/debug');
 
 /**
  * Basic health check endpoint
@@ -17,6 +19,48 @@ router.get('/', async (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+
+router.post('/debug-pr-reminders', async (req, res) => {
+  try {
+    const cronService = require('../../services/cron');
+    const result = await cronService.debugPrReminders();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/debug-channel-archival', async (req, res) => {
+  try {
+    const cronService = require('../../services/cron');
+    const result = await cronService.processChannelArchives();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/debug-stale-prs', async (req, res) => {
+  try {
+    const result = await cronDebug.debugCheckStalePRs();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/debug-channels-to-archive', async (req, res) => {
+  try {
+    const result = await cronDebug.debugCheckChannelsToArchive();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+addCronHealthEndpoint(router);
 
 /**
  * Detailed health check endpoint
