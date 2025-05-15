@@ -9,6 +9,17 @@ const session = require('express-session');
 const path = require('path');
 const config = require('./config');
 const { errorHandler } = require('./middleware/error');
+const { apiLimiter } = require('./middleware/rate-limit');
+const { requestTimeout } = require('./middleware/timeout');
+
+
+// Critical security check for production
+if (process.env.NODE_ENV === 'production') {
+  if (process.env.SKIP_GITHUB_VERIFICATION === 'true' || process.env.SKIP_SLACK_VERIFICATION === 'true') {
+    console.error('CRITICAL SECURITY ERROR: Webhook verification bypass is enabled in production!');
+    process.exit(1); // Stop the server if verification is bypassed in production
+  }
+}
 
 // Create Express app
 const app = express();
@@ -29,6 +40,9 @@ app.use(helmet({
 app.use(express.json()); // Parse JSON request bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded request bodies
 
+
+app.use(requestTimeout(30000)); // 30 second timeout
+
 // Session management
 app.use(session({
   secret: config.app.sessionSecret,
@@ -45,6 +59,8 @@ if (config.app.env === 'production') {
   app.use(express.static(path.join(__dirname, '../public')));
 }
 
+// Apply rate limiting to all API routes
+app.use('/api', apiLimiter);
 
 const authRoutes = require('./api/routes/auth');
 const healthRoutes = require('./api/routes/health');
@@ -60,7 +76,6 @@ const dashboardRoutes = require('./api/routes/dashboard')
 // app.use('/api/admin', require('./api/routes/admin.js'));
 // app.use('/api/onboarding', require('./api/routes/onboarding'));
 
-
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/health', healthRoutes);
@@ -68,9 +83,6 @@ app.use('/api/github', githubRoutes);
 app.use('/api/slack', slackRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/dashboard', dashboardRoutes)
-
-
-
 
 // Serve React app in production
 if (config.app.env === 'production') {

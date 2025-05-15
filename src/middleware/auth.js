@@ -26,8 +26,9 @@ const verifyGitHubWebhook = (req, res, next) => {
       
       // In development, you might skip verification
       if (process.env.NODE_ENV === 'development' && process.env.SKIP_GITHUB_VERIFICATION === 'true') {
-        return next();
-      }
+          console.warn('WARNING: GitHub webhook verification is bypassed. Never use this in production!');
+          return next();
+        }
       
       // Verify signature
       const crypto = require('crypto');

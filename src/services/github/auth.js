@@ -3,6 +3,7 @@ const axios = require('axios');
 const { supabase } = require('../supabase/client');
 const db = require('../supabase/functions');
 const config = require('../../config');
+const logger = require('../../utils/formatting');
 
 const githubAuth = {
   // Generate GitHub OAuth URL
@@ -86,8 +87,40 @@ const githubAuth = {
       
       return { success: true };
     } catch (error) {
-      console.error('Error handling installation:', error);
+      logger.safeErrorLog('handleInstallation', error, { installationId });
       throw error;
+    }
+  },
+
+
+  /**
+   * Validate GitHub credentials before storing
+   * @param {string} accessToken - GitHub access token to validate
+   * @returns {Promise<boolean>} True if valid, false otherwise
+   */
+  async validateGitHubCredentials(accessToken) {
+    try {
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({ auth: accessToken });
+      
+      // Test the token by making a simple API call
+      const { data } = await octokit.users.getAuthenticated();
+      
+      // If we get here, the token is valid
+      return {
+        valid: true,
+        username: data.login
+      };
+    } catch (error) {
+      console.error('GitHub token validation failed:', {
+        message: error.message,
+        status: error.status
+      });
+      
+      return {
+        valid: false,
+        error: error.message
+      };
     }
   },
   
@@ -113,6 +146,12 @@ const githubAuth = {
       }
       
       const accessToken = response.data.access_token;
+
+      const { valid, username, error: validationError } = await this.validateGitHubCredentials(accessToken);
+
+      if (!valid) {
+        throw new Error(`Failed to validate GitHub token: ${validationError}`);
+      }
       
       // Get user info from GitHub
       const userResponse = await axios.get('https://api.github.com/user', {
@@ -148,15 +187,13 @@ const githubAuth = {
       
       return { success: true };
     } catch (error) {
-      console.error('Error exchanging code for token:', error);
+      logger.safeErrorLog('exchangeCodeForToken', error, { code });
       throw error;
     }
   },
 
   async getInstallationToken(installationId) {
-    try {
-      console.log(`[GITHUB AUTH] Getting installation token for installation ID: ${installationId}`);
-      
+    try {      
       // Skip if not a valid installation ID
       if (!installationId || installationId === 'direct_oauth') {
         console.log('[GITHUB AUTH] No valid installation ID provided');
@@ -181,7 +218,7 @@ const githubAuth = {
       console.log(`[GITHUB AUTH] Successfully got installation token`);
       return installationAuthentication.token;
     } catch (error) {
-      console.error('[GITHUB AUTH] Error getting installation token:', error);
+      logger.safeErrorLog('getInstallationToken', error, { installationId });
       return null;
     }
   },
@@ -239,7 +276,7 @@ async  getAccessToken(orgId) {
     console.log('[GITHUB AUTH] No valid tokens found');
     return null;
   } catch (error) {
-    console.error('[GITHUB AUTH] Error getting access token:', error);
+    logger.safeErrorLog('getAccessToken', error, { orgId });
     return null;
   }
 },
@@ -293,7 +330,7 @@ async refreshGitHubToken(refreshTokenStr) {
       refresh_token_expires_at: refreshTokenExpiresAt ? refreshTokenExpiresAt.toISOString() : null
     };
   } catch (error) {
-    console.error('Error refreshing GitHub token:', error);
+    logger.safeErrorLog('refreshGitHubToken', error, { refreshTokenStr });
     throw error;
   }
 },
@@ -329,7 +366,7 @@ async refreshGitHubToken(refreshTokenStr) {
       
       return repos;
     } catch (error) {
-      console.error('Error fetching repositories:', error);
+      logger.safeErrorLog('fetchAndSaveRepositories', error, { orgId });
       throw error;
     }
   },
@@ -418,7 +455,7 @@ async getUsers(orgId) {
       
       return Array.from(usersMap.values());
     } catch (error) {
-      console.error('Error getting GitHub users:', error);
+      logger.safeErrorLog('getUsers', error, { orgId });
       throw error;
     }
   },
@@ -450,7 +487,7 @@ async getRepositories(orgId) {
     
     return repositories;
   } catch (error) {
-    console.error('Error getting repositories:', error);
+    logger.safeErrorLog('getRepositories', error, { orgId });
     throw error;
   }
 },
@@ -472,7 +509,7 @@ async getRepositories(orgId) {
       
       return data;
     } catch (error) {
-      console.error('Error toggling repository:', error);
+      logger.safeErrorLog('toggleRepository', error, { repoId });
       throw error;
     }
   },
@@ -519,7 +556,7 @@ async getRepositories(orgId) {
             message: null
           };
         } catch (apiError) {
-          console.error('Token API validation error:', apiError);
+          logger.safeErrorLog('validateAndRefreshUserToken', error, { user });
           // Token doesn't work with API, try refreshing if possible
         }
       }
@@ -550,7 +587,7 @@ async getRepositories(orgId) {
             };
           }
         } catch (refreshError) {
-          console.error('Token refresh error:', refreshError);
+          logger.safeErrorLog('token refresh error', error, { user });
           return { 
             valid: false, 
             token: null,
@@ -566,7 +603,7 @@ async getRepositories(orgId) {
         message: "Your GitHub authentication has expired. Please reconnect your GitHub account."
       };
     } catch (error) {
-      console.error('Error in validateAndRefreshUserToken:', error);
+    logger.safeErrorLog('validateAndRefreshUserToken', error, { user });
       return { 
         valid: false, 
         token: null,

@@ -54,6 +54,45 @@ const slackAuth = {
     return url.toString();
   },
 
+
+  /**
+   * Validate Slack credentials before storing
+   * @param {string} token - Slack bot token to validate
+   * @returns {Promise<Object>} Validation result
+   */
+  async validateSlackCredentials(token) {
+    try {
+      const client = new WebClient(token);
+      
+      // Try to call a simple API method
+      const response = await client.auth.test();
+      
+      if (!response.ok) {
+        return {
+          valid: false,
+          error: response.error
+        };
+      }
+      
+      return {
+        valid: true,
+        team: response.team,
+        teamId: response.team_id,
+        userId: response.user_id
+      };
+    } catch (error) {
+      console.error('Slack token validation failed:', {
+        message: error.message,
+        code: error.code
+      });
+      
+      return {
+        valid: false,
+        error: error.message
+      };
+    }
+  },
+
   
   // Exchange code for access token
   async exchangeCodeForToken(code, state) {
@@ -72,9 +111,13 @@ const slackAuth = {
       });
       
       const data = response.data;
-      
-      // Log the complete response for debugging
-      console.log('Slack OAuth response:', JSON.stringify(data, null, 2));
+
+      const validationResult = await this.validateSlackCredentials(data.access_token);
+
+      if (!validationResult.valid) {
+        throw new Error(`Failed to validate Slack token: ${validationResult.error}`);
+      }
+
       
       if (!data.ok) {
         throw new Error(`Slack OAuth error: ${data.error}`);

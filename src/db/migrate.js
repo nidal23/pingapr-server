@@ -21,28 +21,44 @@ const getMigrationFiles = () => {
 
 // Get list of already applied migrations
 const getAppliedMigrations = async () => {
-  // Check if migrations table exists
-  const { data: tableExists } = await supabase.from('information_schema.tables')
-    .select('*')
-    .eq('table_name', 'migrations');
-  
-  if (!tableExists || tableExists.length === 0) {
-    // Create migrations table if it doesn't exist
-    await supabase.rpc('create_migrations_table');
-    return [];
-  }
-  
-  // Get list of applied migrations
-  const { data: migrations, error } = await supabase
-    .from('migrations')
-    .select('name');
-  
-  if (error) {
-    console.error('Error fetching applied migrations:', error);
+  try {
+    // Try to query the migrations table directly
+    const { data, error } = await supabase
+      .from('migrations')
+      .select('name');
+    
+    // If error is table doesn't exist, create it
+    if (error && error.code === '42P01') { // Table doesn't exist
+      console.log('Migrations table does not exist, creating it...');
+      
+      // Create the migrations table
+      const { error: createError } = await supabase.rpc('execute_sql', {
+        sql_string: `
+          CREATE TABLE IF NOT EXISTS migrations (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL UNIQUE,
+            applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+          );
+        `
+      });
+      
+      if (createError) {
+        console.error('Error creating migrations table:', createError);
+        throw createError;
+      }
+      
+      return [];
+    } 
+    else if (error) {
+      console.error('Error checking migrations table:', error);
+      throw error;
+    }
+    
+    return data.map(m => m.name);
+  } catch (error) {
+    console.error('Error in getAppliedMigrations:', error);
     throw error;
   }
-  
-  return migrations.map(m => m.name);
 };
 
 // Apply migrations
