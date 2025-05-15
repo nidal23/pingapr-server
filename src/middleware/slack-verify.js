@@ -12,8 +12,10 @@ const verifySlackRequest = (req, res, next) => {
   
   // Skip verification in development if needed
   if (process.env.NODE_ENV === 'development' && process.env.SKIP_SLACK_VERIFICATION === 'true') {
+    console.warn('WARNING: Slack verification is bypassed. Never use this in production!');
     return next();
   }
+
   
   const timestamp = req.headers['x-slack-request-timestamp'];
   const slackSignature = req.headers['x-slack-signature'];

@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { supabase } = require('../../services/supabase/client');
+const { checkDatabaseHealth, verifyDatabaseStructure } = require('../../services/supabase/healthcheck');
 const pkg = require('../../../package.json');
 const { addCronHealthEndpoint } = require('../../services/cron');
 const cronDebug = require('../../services/cron/debug');
@@ -13,12 +14,26 @@ const cronDebug = require('../../services/cron/debug');
  * GET /api/health
  */
 router.get('/', async (req, res) => {
-  res.json({
-    status: 'ok',
-    version: pkg.version,
-    timestamp: new Date().toISOString()
-  });
+  // Do a quick DB check but don't fail the health check if it's not successful
+  try {
+    const dbHealth = await checkDatabaseHealth();
+    res.json({
+      status: 'ok',
+      version: pkg.version,
+      database: dbHealth.status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    // Still return ok but indicate DB issue
+    res.json({
+      status: 'ok',
+      version: pkg.version,
+      database: 'error',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
+
 
 
 router.post('/debug-pr-reminders', async (req, res) => {
@@ -67,36 +82,36 @@ addCronHealthEndpoint(router);
  * GET /api/health/detailed
  */
 router.get('/detailed', async (req, res) => {
-  let dbStatus = 'error';
-  let dbLatency = null;
-  
   try {
     // Check database connectivity with latency measurement
-    const startTime = Date.now();
-    const { data, error } = await supabase.from('migrations').select('count').limit(1);
-    const endTime = Date.now();
+    const dbHealth = await checkDatabaseHealth();
+    const dbStructure = await verifyDatabaseStructure();
     
-    dbStatus = error ? 'error' : 'ok';
-    dbLatency = endTime - startTime;
-  } catch (error) {
-    console.error('Health check error:', error);
-  }
-  
-  res.json({
-    status: dbStatus === 'ok' ? 'ok' : 'degraded',
-    version: pkg.version,
-    timestamp: new Date().toISOString(),
-    services: {
-      api: {
-        status: 'ok',
-        uptime: process.uptime()
-      },
-      database: {
-        status: dbStatus,
-        latency: dbLatency
+    res.json({
+      status: dbHealth.status === 'ok' && dbStructure.status === 'ok' ? 'ok' : 'degraded',
+      version: pkg.version,
+      timestamp: new Date().toISOString(),
+      services: {
+        api: {
+          status: 'ok',
+          uptime: process.uptime()
+        },
+        database: {
+          status: dbHealth.status,
+          latency: dbHealth.latency,
+          structure: dbStructure.status,
+          missingTables: dbStructure.missingTables
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      version: pkg.version,
+      timestamp: new Date().toISOString(),
+      error: error.message
+    });
+  }
 });
 
 module.exports = router;

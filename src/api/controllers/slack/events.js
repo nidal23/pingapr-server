@@ -19,14 +19,42 @@ const handleEvents = async (req, res) => {
   // For other events, respond immediately to avoid Slack timeout
   res.status(200).send();
   
-  try {
-    // Only process message events in threads
-    if (event && event.type === 'message' && event.thread_ts && !event.bot_id) {
-      console.log('i am here inside handle events')
-      await processThreadReply(event);
-    }
-  } catch (error) {
-    console.error('Error processing Slack event:', error);
+processSlackEvent(type, event)
+    .catch(error => {
+      // Safe error logging
+      const safeError = {
+        message: error.message,
+        code: error.code,
+        status: error.status
+      };
+      
+      console.error('Error processing Slack event:', safeError, {
+        eventType: type,
+        eventSubtype: event?.subtype,
+        channel: event?.channel
+      });
+    });
+};
+
+
+/**
+ * Process Slack event asynchronously
+ * @param {string} type - Event type
+ * @param {Object} event - Event payload
+ */
+const processSlackEvent = async (type, event) => {
+  // Don't process if essential data is missing
+  if (!event) {
+    console.log('No event data to process');
+    return;
+  }
+  
+  // Only process message events in threads, skip bot messages
+  if (event.type === 'message' && event.thread_ts && !event.bot_id) {
+    console.log(`Processing thread reply: ${event.thread_ts}`);
+    await processThreadReply(event);
+  } else {
+    console.log(`Ignoring event type: ${event.type}, thread_ts: ${event.thread_ts}, bot_id: ${event.bot_id}`);
   }
 };
 
@@ -48,9 +76,7 @@ const processThreadReply = async (event) => {
       console.log('No GitHub comment found for thread:', event.thread_ts);
       return;
     }
-    
-    console.log(`Found comment: ID=${comment.id}, type=${comment.comment_type || 'unknown'}, github_comment_id=${comment.github_comment_id}`);
-    
+        
     // Make sure we have all the necessary data
     if (!comment.pull_request) {
       console.log('Pull request data missing, fetching directly');

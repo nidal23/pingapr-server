@@ -72,30 +72,42 @@ const updateUserIdentities = async (req, res, next) => {
     const userId = req.user.id;
     const orgId = req.user.org_id;
     
-    // Begin by checking for conflicts
-    const { data: conflicts, error: conflictError } = await supabase
+    // Begin by checking for conflicts - fixed SQL injection by using separate queries
+    // Check for GitHub username conflicts
+    const { data: githubConflicts, error: githubError } = await supabase
       .from('users')
-      .select('id, github_username, slack_user_id')
+      .select('id, github_username')
       .eq('org_id', orgId)
-      .neq('id', userId)
-      .or(`github_username.eq.${githubUsername},slack_user_id.eq.${slackUserId}`);
+      .eq('github_username', githubUsername)
+      .neq('id', userId);
     
-    if (conflictError) {
-      console.error('Error checking for conflicts:', conflictError);
-      return res.status(500).json({ error: 'Failed to check for identity conflicts' });
+    // Check for Slack user ID conflicts
+    const { data: slackConflicts, error: slackError } = await supabase
+      .from('users')
+      .select('id, slack_user_id')
+      .eq('org_id', orgId)
+      .eq('slack_user_id', slackUserId)
+      .neq('id', userId);
+    
+    if (githubError || slackError) {
+      const errorMsg = 'Failed to check for identity conflicts';
+      console.error(errorMsg, { 
+        githubError: githubError?.message,
+        slackError: slackError?.message,
+        userId,
+        orgId
+      });
+      return res.status(500).json({ error: errorMsg });
     }
     
     // Handle any conflicts we found
-    const githubConflict = conflicts.find(u => u.github_username === githubUsername);
-    const slackConflict = conflicts.find(u => u.slack_user_id === slackUserId);
-    
-    if (githubConflict) {
+    if (githubConflicts && githubConflicts.length > 0) {
       return res.status(409).json({ 
         error: 'This GitHub username is already linked to another user in your organization'
       });
     }
     
-    if (slackConflict) {
+    if (slackConflicts && slackConflicts.length > 0) {
       return res.status(409).json({ 
         error: 'This Slack account is already linked to another user in your organization'
       });
@@ -114,13 +126,23 @@ const updateUserIdentities = async (req, res, next) => {
       .single();
       
     if (error) {
-      console.error('Error updating user identities:', error);
-      return res.status(500).json({ error: error.message });
+      console.error('Error updating user identities:', {
+        error: error.message,
+        userId,
+        orgId
+      });
+      return res.status(500).json({ error: 'Failed to update user identities' });
     }
       
+    // Success - return the updated user data
     res.json(data);
   } catch (error) {
-    console.error('Exception in updateUserIdentities:', error);
+    // Safe error logging without exposing full error details
+    console.error('Exception in updateUserIdentities:', {
+      message: error.message,
+      userId: req.user?.id,
+      orgId: req.user?.org_id
+    });
     next(error);
   }
 };
