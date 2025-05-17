@@ -60,10 +60,9 @@ const getCurrentUser = async (req, res, next) => {
   }
 };
 
-
 const updateUserIdentities = async (req, res, next) => {
   try {
-    const { githubUsername, slackUserId } = req.body;
+    const { githubUsername, slackUserId, avatarUrl } = req.body;
     
     if (!githubUsername || !slackUserId) {
       return res.status(400).json({ error: 'GitHub username and Slack user ID are required' });
@@ -114,13 +113,21 @@ const updateUserIdentities = async (req, res, next) => {
     }
     
     // If no conflicts, proceed with the update
+    // Include avatarUrl in the update if it exists
+    const updateData = {
+      github_username: githubUsername,
+      slack_user_id: slackUserId,
+      is_admin: true // Set as admin since this is the person doing the onboarding
+    };
+    
+    // Add avatar_url to update data if it was provided
+    if (avatarUrl) {
+      updateData.avatar_url = avatarUrl;
+    }
+    
     const { data, error } = await supabase
       .from('users')
-      .update({
-        github_username: githubUsername,
-        slack_user_id: slackUserId,
-        is_admin: true // Set as admin since this is the person doing the onboarding
-      })
+      .update(updateData)
       .eq('id', userId)
       .select()
       .single();

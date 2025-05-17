@@ -17,7 +17,8 @@ const loginSchema = Joi.object({
 // Update identities validation schema
 const updateIdentitiesSchema = Joi.object({
   githubUsername: Joi.string().required(),
-  slackUserId: Joi.string().required()
+  slackUserId: Joi.string().required(),
+  avatarUrl: Joi.string().optional()
 });
 
 module.exports = {
