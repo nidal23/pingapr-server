@@ -108,8 +108,7 @@ const dashboardService = {
             name: reviewer.github_username || 'Unknown',
             github_username: reviewer.github_username,
             status: rr.status,
-            avatar_url: `https://i.pravatar.cc/150?u=${reviewer.github_username}`
-          };
+            avatar_url: reviewer?.avatar_url          };
         });
         
         return {
@@ -122,6 +121,7 @@ const dashboardService = {
           github_repo_name: repo?.github_repo_name || 'Unknown',
           author_name: author?.name || author?.github_username || 'Unknown',
           author_username: author?.github_username || 'Unknown',
+          author_avatar:author?.avatar_url || '',
           reviewers
         };
       })
@@ -644,7 +644,7 @@ async getActivePRs(repoIds, orgId, startDate, teamMemberIds = null) {
         name: reviewer.github_username || 'Unknown',
         github_username: reviewer.github_username,
         status: rr.status,
-        avatar_url: `https://i.pravatar.cc/150?u=${reviewer.github_username}`
+        avatar_url: reviewer?.avatar_url
       };
     });
     
@@ -658,6 +658,7 @@ async getActivePRs(repoIds, orgId, startDate, teamMemberIds = null) {
       github_repo_name: repo?.github_repo_name || 'Unknown',
       author_name: author?.name || author?.github_username || 'Unknown',
       author_username: author?.github_username || 'Unknown',
+      author_avatar:author?.avatar_url || '',
       reviewers
     };
   });
@@ -1151,6 +1152,8 @@ async getCollaborationData(orgId, period = 'monthly', repoId = null, teamId = nu
   if (teamMemberIds && teamMemberIds.length > 0) {
     teamMembers = teamMembers.filter(member => teamMemberIds.includes(member.id));
   }
+
+  console.log('team members in collaboration data: ', teamMembers)
   
   // Get reviewer network (who reviews whose code)
   const reviewerNetwork = await this.getReviewerNetwork(repoIds, teamMembers, startDate, teamMemberIds);
@@ -1310,7 +1313,7 @@ async getTeamMemberPerformance(repoIds, teamMembers, startDate) {
       reviews_assigned: assignedReviews.length,
       reviews_completed: completedReviews.length,
       avg_review_time_hours: avgReviewTime,
-      avatar_url: `https://i.pravatar.cc/150?u=${member.github_username}`
+      avatar_url: member.avatar_url
     };
   }));
 },

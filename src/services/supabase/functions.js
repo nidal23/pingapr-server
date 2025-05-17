@@ -549,7 +549,7 @@ const pullRequests = {
     .from('review_requests')
     .select(`
       *,
-      reviewer:reviewer_id(id, github_username, slack_user_id)
+      reviewer:reviewer_id(id, github_username, slack_user_id, avatar_url)
     `)
     .eq('pr_id', prId);
   
