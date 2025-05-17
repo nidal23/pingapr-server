@@ -26,10 +26,10 @@ const getStatus = async (req, res, next) => {
         .eq('org_id', orgId)
         .eq('is_active', true);
       
-      // Get user mappings
+      // Get user mappings - include avatar_url in select
       const { data: users } = await supabase
         .from('users')
-        .select('github_username, slack_user_id, is_admin')
+        .select('github_username, slack_user_id, is_admin, avatar_url')
         .eq('org_id', orgId)
         .not('github_username', 'like', 'pending_%');
       
@@ -40,7 +40,8 @@ const getStatus = async (req, res, next) => {
         userMappings: users?.map(user => ({
           githubUsername: user.github_username,
           slackUserId: user.slack_user_id,
-          isAdmin: user.is_admin
+          isAdmin: user.is_admin,
+          avatarUrl: user.avatar_url  // Include avatar URL in response
         })) || [],
         settings: org?.settings || {
           prReminderHours: 24,
@@ -54,7 +55,6 @@ const getStatus = async (req, res, next) => {
   };
 
 // Save user mappings
-// src/api/controllers/onboarding.js
 const saveUserMappings = async (req, res, next) => {
   try {
     const orgId = req.organization.id;
@@ -67,7 +67,7 @@ const saveUserMappings = async (req, res, next) => {
     // Get existing users for this organization
     const { data: existingUsers } = await supabase
       .from('users')
-      .select('id, github_username, slack_user_id, is_admin')
+      .select('id, github_username, slack_user_id, is_admin, avatar_url')
       .eq('org_id', orgId);
     
     // Create maps for lookup
@@ -115,7 +115,8 @@ const saveUserMappings = async (req, res, next) => {
               .from('users')
               .update({
                 slack_user_id: mapping.slackUserId,
-                is_admin: !!mapping.isAdmin
+                is_admin: !!mapping.isAdmin,
+                avatar_url: mapping.avatarUrl || null  // Include avatar URL in update
               })
               .eq('id', existingUserByGithub.id)
               .select();
@@ -129,7 +130,8 @@ const saveUserMappings = async (req, res, next) => {
               .update({
                 github_username: mapping.githubUsername,
                 slack_user_id: mapping.slackUserId,
-                is_admin: !!mapping.isAdmin
+                is_admin: !!mapping.isAdmin,
+                avatar_url: mapping.avatarUrl || null  // Include avatar URL in update
               })
               .eq('id', userToUpdate.id)
               .select();
@@ -146,7 +148,8 @@ const saveUserMappings = async (req, res, next) => {
               org_id: orgId,
               github_username: mapping.githubUsername,
               slack_user_id: mapping.slackUserId,
-              is_admin: !!mapping.isAdmin
+              is_admin: !!mapping.isAdmin,
+              avatar_url: mapping.avatarUrl || null  // Include avatar URL for new users
             })
             .select();
             
