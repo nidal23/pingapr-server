@@ -90,7 +90,7 @@ const authService = {
     // Find user by email
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, name, email, password, is_admin, org_id')
+      .select('id, name, email, password, is_admin, org_id, avatar_url')
       .eq('email', email)
       .single();
     
