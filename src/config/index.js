@@ -27,7 +27,9 @@ const config = {
     clientId: process.env.GITHUB_CLIENT_ID,
     clientSecret: process.env.GITHUB_CLIENT_SECRET,
     privateKey: process.env.GITHUB_PRIVATE_KEY?.replace(/\\n/g, '\n'), // Handle newlines in private key
-    webhookSecret: process.env.GITHUB_WEBHOOK_SECRET
+    webhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
+    redirectUri: process.env.GITHUB_REDIRECT_URI,
+    userRedirectUri: process.env.GITHUB_USER_REDIRECT_URI
   },
   
   // Slack App settings
@@ -35,7 +37,8 @@ const config = {
     clientId: process.env.SLACK_CLIENT_ID,
     clientSecret: process.env.SLACK_CLIENT_SECRET,
     signingSecret: process.env.SLACK_SIGNING_SECRET,
-    redirectUri:process.env.SLACK_REDIRECT_URI
+    redirectUri:process.env.SLACK_REDIRECT_URI,
+    userRedirectUri: process.env.SLACK_USER_REDIRECT_URI
   },
   
   // Default settings for organizations

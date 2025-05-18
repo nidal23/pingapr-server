@@ -34,7 +34,7 @@ const githubUserAuth = {
       // This is GitHub's recommended approach for GitHub Apps
       const url = new URL('https://github.com/login/oauth/authorize');
       url.searchParams.append('client_id', config.github.clientId);
-      url.searchParams.append('redirect_uri', `${process.env.GITHUB_USER_REDIRECT_URI}`);
+      url.searchParams.append('redirect_uri', `${config.github.userRedirectUri}`);
       url.searchParams.append('state', state);
       
       // No scopes needed for GitHub App user access tokens
@@ -63,7 +63,7 @@ const githubUserAuth = {
         client_id: config.github.clientId,
         client_secret: config.github.clientSecret,
         code,
-        redirect_uri: process.env.GITHUB_USER_REDIRECT_URI
+        redirect_uri: config.github.userRedirectUri
       }, {
         headers: {
           Accept: 'application/json'

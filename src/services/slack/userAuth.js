@@ -32,7 +32,7 @@ const slackUserAuth = {
       // Build Slack OAuth URL
       const url = new URL('https://slack.com/oauth/v2/authorize');
       url.searchParams.append('client_id', config.slack.clientId);
-      url.searchParams.append('redirect_uri', `${process.env.SLACK_USER_REDIRECT_URI}`);
+      url.searchParams.append('redirect_uri', `${config.slack.userRedirectUri}`);
       url.searchParams.append('state', state);
       
       // Request only user scopes
@@ -65,7 +65,7 @@ const slackUserAuth = {
           client_id: config.slack.clientId,
           client_secret: config.slack.clientSecret,
           code,
-          redirect_uri: process.env.SLACK_USER_REDIRECT_URI
+          redirect_uri: config.slack.userRedirectUri
         }
       });
       

@@ -17,7 +17,7 @@ const githubAuth = {
     // Build GitHub OAuth URL
     const url = new URL('https://github.com/login/oauth/authorize');
     url.searchParams.append('client_id', config.github.clientId);
-    url.searchParams.append('redirect_uri', process.env.GITHUB_REDIRECT_URI);
+    url.searchParams.append('redirect_uri', config.github.redirectUri);
     url.searchParams.append('scope', 'repo user:email admin:org');
     url.searchParams.append('state', state);
     
@@ -29,7 +29,7 @@ const githubAuth = {
     const state = Buffer.from(JSON.stringify({ orgId })).toString('base64');
     
     // URL to install the GitHub App
-    const url = `https://github.com/apps/${process.env.GITHUB_APP_NAME}/installations/new?state=${state}`;
+    const url = `https://github.com/apps/${config.github.appName}/installations/new?state=${state}`;
     
     return url;
   },
@@ -47,8 +47,8 @@ const githubAuth = {
       const appOctokit = new Octokit({
         authStrategy: createAppAuth,
         auth: {
-          appId: process.env.GITHUB_APP_ID,
-          privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
+          appId: config.github.appId,
+          privateKey: config.github.privateKey.replace(/\\n/g, '\n'),
           installationId
         }
       });
@@ -203,10 +203,10 @@ const githubAuth = {
       const { createAppAuth } = await import('@octokit/auth-app');
       
       const auth = createAppAuth({
-        appId: process.env.GITHUB_APP_ID,
-        privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
-        clientId: process.env.GITHUB_CLIENT_ID,
-        clientSecret: process.env.GITHUB_CLIENT_SECRET
+        appId: config.github.appId,
+        privateKey: config.github.privateKey.replace(/\\n/g, '\n'),
+        clientId: config.github.clientId,
+        clientSecret: config.github.clientSecret
       });
       
       // Request an installation token
@@ -284,8 +284,8 @@ async  getAccessToken(orgId) {
 async refreshGitHubToken(refreshTokenStr) {
   try {
     // Set up the request to GitHub's token endpoint
-    const clientId = process.env.GITHUB_CLIENT_ID;
-    const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+    const clientId = config.github.clientId;
+    const clientSecret = config.github.clientSecret;
     
     // Call GitHub's token endpoint to get a new access token
     const response = await fetch('https://github.com/login/oauth/access_token', {
@@ -391,8 +391,8 @@ async getUsers(orgId) {
       const appOctokit = new Octokit({
         authStrategy: createAppAuth,
         auth: {
-          appId: process.env.GITHUB_APP_ID,
-          privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
+          appId: config.github.appId,
+          privateKey: config.github.privateKey.replace(/\\n/g, '\n'),
           installationId: org.github_installation_id
         }
       });
