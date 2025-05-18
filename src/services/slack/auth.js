@@ -103,10 +103,10 @@ const slackAuth = {
       // Exchange code for token
       const response = await axios.post('https://slack.com/api/oauth.v2.access', null, {
         params: {
-          client_id: process.env.SLACK_CLIENT_ID,
-          client_secret: process.env.SLACK_CLIENT_SECRET,
+          client_id: config.slack.clientId,
+          client_secret: config.slack.clientSecret,
           code,
-          redirect_uri: process.env.SLACK_REDIRECT_URI
+          redirect_uri: config.slack.redirectUri
         }
       });
       
