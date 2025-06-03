@@ -11,7 +11,7 @@ const config = require('./config');
 const { errorHandler } = require('./middleware/error');
 const { apiLimiter } = require('./middleware/rate-limit');
 const { requestTimeout } = require('./middleware/timeout');
-
+const { notFoundHandler } = require('./middleware/error');
 
 // Critical security check for production
 if (process.env.NODE_ENV === 'production') {
@@ -68,6 +68,8 @@ const githubRoutes = require('./api/routes/github');
 const slackRoutes = require('./api/routes/slack');
 const onboardingRoutes = require('./api/routes/onboarding')
 const dashboardRoutes = require('./api/routes/dashboard')
+const billingRoutes = require('./api/routes/billing');
+const usageRoutes = require('./api/routes/usage'); 
 
 // API routes
 // app.use('/api/health', require('./api/routes/health'));
@@ -83,6 +85,13 @@ app.use('/api/github', githubRoutes);
 app.use('/api/slack', slackRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/dashboard', dashboardRoutes)
+app.use('/api/billing', billingRoutes);
+app.use('/api/usage', usageRoutes);
+
+
+// 404 handler for API routes
+app.use(notFoundHandler);
+
 
 // Serve React app in production
 if (config.app.env === 'production') {
